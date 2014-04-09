@@ -60,8 +60,8 @@ namespace lock_free
 			}
 		
 			/**
-			 * clears the job queue, storing all pending jobs in the supplied argument.
-			 * the argument is also returned for convenience
+			 * clears the job queue, storing all pending jobs in the supplied vector.
+			 * the vector is also returned for convenience
 			 */
 			vector_type& pop_all( vector_type &unfinished )
 			{
@@ -128,8 +128,8 @@ namespace lock_free
 			struct node_type
 			{
 				node_type( const value_type &original ) :
-				value( original ),
-				next( nullptr ) { }
+					value( original ),
+					next( nullptr ) { }
 				
 				value_type value;
 				node_ptr next;
