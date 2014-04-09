@@ -89,6 +89,11 @@ namespace lock_free
 					// empty
 				}
 			}
+		
+			bool empty() const
+			{
+				return start_ != nullptr;
+			}
 			
 		private:
 			
