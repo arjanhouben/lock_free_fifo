@@ -27,9 +27,9 @@ T to( const string &str )
 int main( int argc, char *argv[] )
 {
 	jobqueue queue;
-	
-	const auto expected = 1e5;
-	
+
+	const auto expected = 1e7;
+
 	atomic_size_t actual( 0 );
 	for ( auto i = 0; i < expected; ++i )
 	{
@@ -40,7 +40,7 @@ int main( int argc, char *argv[] )
 			}
 		);
 	}
-	
+
 	go = [ &queue ]()
 	{
 		function_type func;
@@ -49,22 +49,21 @@ int main( int argc, char *argv[] )
 			func();
 		}
 	};
-	
-	struct gothread : thread
-	{
-		gothread() : thread( go ) { }
-	};
-	
+
 	auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 20;
-	
-	vector< gothread > threads( thread_count );
-	
+
+	vector< thread > threads;
+	while ( thread_count-- )
+	{
+		threads.push_back( thread( go ) );
+	}
+
 	for ( auto &t : threads )
 	{
 		t.join();
 	}
-	
+
 	cout << "expected: " << expected << " got: " << actual << endl;
-	
+
 	return ( expected != actual );
 }
