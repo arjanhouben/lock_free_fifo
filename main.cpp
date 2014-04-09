@@ -10,38 +10,43 @@ using namespace std;
 
 typedef function< void() > function_type;
 
-class job_list
+template < typename Value >
+class lock_free_list
 {
 	public:
 	
-		job_list() :
+		typedef Value value_type;
+	
+		lock_free_list() :
 			start_(),
 			end_() { }
 		
-		void addJob( const function_type &func )
+		template < typename T >
+		void add_job( T &&func )
 		{
-			node_raw *newnode( new node_raw() );
-			newnode->func = func;
+			node_ptr newnode( new node_type( forward< T >( func ) ) );
 			
-			node_raw *tmp = nullptr;
+			node_ptr tmp = nullptr;
 			start_.compare_exchange_strong( tmp, newnode );
 			
-			node_raw *prev_end = end_.exchange( newnode );
+			node_ptr prev_end = end_.exchange( newnode );
 			if ( prev_end )
 			{
 				prev_end->next = newnode;
 			}
 		}
 		
-		bool takeJob( function_type &func )
+		bool take_job( value_type &func )
 		{
-			node_raw *tmp = start_;
+			node_ptr tmp = start_;
 			
 			while ( tmp )
 			{
 				if ( start_.compare_exchange_weak( tmp, tmp->next ) )
 				{
 					func = tmp->func;
+					
+					delete tmp;
 					
 					return true;
 				}
@@ -53,13 +58,18 @@ class job_list
 	
 	private:
 		
-		struct node_raw;
-		typedef atomic< node_raw* > node;
+		struct node_type;
+		typedef node_type* node_ptr;
+		typedef atomic< node_ptr > node;
 	
-		struct node_raw
+		struct node_type
 		{
-			function_type func;
-			node_raw *next;
+			node_type( const value_type &original ) :
+				func( original ),
+				next( nullptr ) { }
+			
+			value_type func;
+			node_ptr next;
 		};
 	
 		node start_, end_;
@@ -67,17 +77,21 @@ class job_list
 
 function_type go;
 
+typedef lock_free_list< function_type > jobqueue;
+
 int main( int argc, char *argv[] )
 {
-	job_list queue;
+	jobqueue queue;
 	
-	auto count = 0;
-	for ( int i = 0; i < 1e5; ++i )
+	const auto expected = 1e7;
+	
+	atomic_size_t actual( 0 );
+	for ( int i = 0; i < expected; ++i )
 	{
-		queue.addJob(
+		queue.add_job(
 			[&]()
 			{
-				++count;
+				++actual;
 			}
 		);
 	}
@@ -85,7 +99,7 @@ int main( int argc, char *argv[] )
 	go = [ &queue ]()
 	{
 		function_type func;
-		while ( queue.takeJob( func ) )
+		while ( queue.take_job( func ) )
 		{
 			func();
 		}
@@ -103,7 +117,7 @@ int main( int argc, char *argv[] )
 		t.join();
 	}
 	
-	cout << count << endl;
+	cout << "expected: " << expected << " got: " << actual << endl;
 	
-	return 0;
+	return ( expected != actual );
 }
