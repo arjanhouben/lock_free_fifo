@@ -19,9 +19,8 @@ typedef lock_free::fifo< function_type > jobqueue;
 template < typename T >
 T to( const string &str )
 {
-	stringstream stream( str );
 	T result;
-	stream >> result;
+	stringstream( str ) >> result;
 	return result;
 }
 

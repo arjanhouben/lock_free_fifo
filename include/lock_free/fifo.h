@@ -15,10 +15,16 @@ namespace lock_free
 			
 			typedef Value value_type;
 			typedef Allocator allocator_type;
+			typedef std::vector< value_type, allocator_type > vector_type;
 			
 			fifo() :
 				start_(),
 				end_() {}
+		
+			~fifo()
+			{
+				clear();
+			}
 			
 			/**
 			 * pushes an item into the job queue, may throw if allocation fails
@@ -45,15 +51,64 @@ namespace lock_free
 			 */
 			bool pop( value_type &func )
 			{
+				auto assign = []( node_ptr ptr, value_type &value)
+				{
+					std::swap( value, ptr->func );
+					delete ptr;
+				};
+				return pop_generic( func, assign );
+			}
+		
+			/**
+			 * clears the job queue.
+			 * if there where items left unhandled, they are placed inside the unfinished argument
+			 * which is also returned for convenience
+			 */
+			vector_type& clear( vector_type &unfinished )
+			{
+				value_type tmp;
+				while ( pop( tmp ) )
+				{
+					unfinished.push_back( tmp );
+				}
+				return unfinished;
+			}
+		
+			/**
+			 * clears the job queue.
+			 */
+			void clear()
+			{
+				auto del = []( node_ptr ptr, value_type& )
+				{
+					delete ptr;
+				};
+				value_type tmp;
+				while ( pop_generic( tmp, del ) )
+				{
+					// empty
+				}
+			}
+			
+		private:
+			
+			struct node_type;
+			typedef node_type* node_ptr;
+			typedef std::atomic< node_ptr > node;
+		
+			fifo( const fifo& );
+			fifo& operator = ( const fifo& );
+			
+			template < typename Assign >
+			bool pop_generic( value_type &func, Assign assign )
+			{
 				node_ptr tmp = start_;
 				
 				while ( tmp )
 				{
 					if ( start_.compare_exchange_weak( tmp, tmp->next ) )
 					{
-						func = tmp->func;
-						
-						delete tmp;
+						assign( tmp, func );
 						
 						return true;
 					}
@@ -62,15 +117,6 @@ namespace lock_free
 				
 				return false;
 			}
-			
-		private:
-		
-			fifo( const fifo& );
-			fifo& operator = ( const fifo& );
-			
-			struct node_type;
-			typedef node_type* node_ptr;
-			typedef std::atomic< node_ptr > node;
 			
 			struct node_type
 			{
