@@ -20,13 +20,13 @@ class job_list
 		
 		void addJob( const function_type &func )
 		{
-			node newnode = make_shared< node_raw >();
+			node_raw *newnode( new node_raw() );
 			newnode->func = func;
 			
-			node tmp;
-			atomic_compare_exchange_strong( &start_, &tmp, newnode );
+			node_raw *tmp = nullptr;
+			start_.compare_exchange_strong( tmp, newnode );
 			
-			node prev_end = atomic_exchange( &end_, newnode );
+			node_raw *prev_end = end_.exchange( newnode );
 			if ( prev_end )
 			{
 				prev_end->next = newnode;
@@ -35,11 +35,11 @@ class job_list
 		
 		bool takeJob( function_type &func )
 		{
-			node tmp = atomic_load( &start_ );
+			node_raw *tmp = start_;
 			
 			while ( tmp )
 			{
-				if ( atomic_compare_exchange_weak( &start_, &tmp, tmp->next ) )
+				if ( start_.compare_exchange_weak( tmp, tmp->next ) )
 				{
 					func = tmp->func;
 					
@@ -54,12 +54,12 @@ class job_list
 	private:
 		
 		struct node_raw;
-		typedef shared_ptr< node_raw > node;
+		typedef atomic< node_raw* > node;
 	
 		struct node_raw
 		{
 			function_type func;
-			node next;
+			node_raw *next;
 		};
 	
 		node start_, end_;
@@ -72,7 +72,7 @@ int main( int argc, char *argv[] )
 	job_list queue;
 	
 	auto count = 0;
-	for ( int i = 0; i < 1e3; ++i )
+	for ( int i = 0; i < 1e5; ++i )
 	{
 		queue.addJob(
 			[&]()
