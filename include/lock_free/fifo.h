@@ -8,7 +8,19 @@ namespace lock_free
 	 * This is a lock free fifo, which can be used for multi-producer, multi-consumer
 	 * type job queue
 	 */
-	template < typename Value, typename Allocator = std::allocator< Value > >
+	
+	template < typename Value >
+	struct fifo_node_type
+	{
+		fifo_node_type( const Value &original ) :
+			value( original ),
+			next( nullptr ) { }
+		
+		Value value;
+		fifo_node_type *next;
+	};
+	
+	template < typename Value, typename Allocator = std::allocator< fifo_node_type< Value > > >
 	class fifo
 	{
 		public:
@@ -19,7 +31,8 @@ namespace lock_free
 			
 			fifo() :
 				start_(),
-				end_() {}
+				end_(),
+				allocator_() {}
 		
 			~fifo()
 			{
@@ -33,7 +46,7 @@ namespace lock_free
 			template < typename T >
 			void push( T &&val )
 			{
-				node_ptr newnode( new node_type( std::forward< T >( val ) ) );
+				node_ptr newnode = create_node( std::forward< T >( val ) );
 				
 				node_ptr tmp = nullptr;
 				start_.compare_exchange_strong( tmp, newnode );
@@ -51,10 +64,10 @@ namespace lock_free
 			 */
 			bool pop( value_type &func )
 			{
-				auto assign = []( node_ptr ptr, value_type &value)
+				auto assign = [ & ]( node_ptr ptr, value_type &value)
 				{
 					std::swap( value, ptr->value );
-					delete ptr;
+					destroy_node( ptr );
 				};
 				return pop_generic( func, assign );
 			}
@@ -78,9 +91,9 @@ namespace lock_free
 			 */
 			void clear()
 			{
-				auto del = []( node_ptr ptr, value_type& )
+				auto del = [ & ]( node_ptr ptr, value_type& )
 				{
-					delete ptr;
+					destroy_node( ptr );
 				};
 				value_type tmp;
 				while ( pop_generic( tmp, del ) )
@@ -99,7 +112,7 @@ namespace lock_free
 			
 		private:
 			
-			struct node_type;
+			typedef fifo_node_type< value_type > node_type;
 			typedef node_type* node_ptr;
 			typedef std::atomic< node_ptr > node;
 		
@@ -125,16 +138,21 @@ namespace lock_free
 				return false;
 			}
 			
-			struct node_type
+			template < typename T >
+			node_ptr create_node( T &&t )
 			{
-				node_type( const value_type &original ) :
-					value( original ),
-					next( nullptr ) { }
-				
-				value_type value;
-				node_ptr next;
-			};
+				node_ptr result = reinterpret_cast< node_ptr >( allocator_.allocate( 1 ) );
+				new ( result ) node_type( std::forward< T >( t ) );
+				return result;
+			}
+			
+			void destroy_node( node_ptr &t )
+			{
+				allocator_.destroy( t );
+				allocator_.deallocate( t, 1 );
+			}
 			
 			node start_, end_;
+			allocator_type allocator_;
 	};
 }
