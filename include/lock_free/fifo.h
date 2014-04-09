@@ -31,9 +31,9 @@ namespace lock_free
 			 * leaving the queue unchanged
 			 */
 			template < typename T >
-			void push( T &&func )
+			void push( T &&val )
 			{
-				node_ptr newnode( new node_type( std::forward< T >( func ) ) );
+				node_ptr newnode( new node_type( std::forward< T >( val ) ) );
 				
 				node_ptr tmp = nullptr;
 				start_.compare_exchange_strong( tmp, newnode );
@@ -53,18 +53,17 @@ namespace lock_free
 			{
 				auto assign = []( node_ptr ptr, value_type &value)
 				{
-					std::swap( value, ptr->func );
+					std::swap( value, ptr->value );
 					delete ptr;
 				};
 				return pop_generic( func, assign );
 			}
 		
 			/**
-			 * clears the job queue.
-			 * if there where items left unhandled, they are placed inside the unfinished argument
-			 * which is also returned for convenience
+			 * clears the job queue, storing all pending jobs in the supplied argument.
+			 * the argument is also returned for convenience
 			 */
-			vector_type& clear( vector_type &unfinished )
+			vector_type& pop_all( vector_type &unfinished )
 			{
 				value_type tmp;
 				while ( pop( tmp ) )
@@ -89,7 +88,10 @@ namespace lock_free
 					// empty
 				}
 			}
-		
+			
+			/**
+			 * returns true if there are no pending jobs
+			 */
 			bool empty() const
 			{
 				return start_ != nullptr;
@@ -126,10 +128,10 @@ namespace lock_free
 			struct node_type
 			{
 				node_type( const value_type &original ) :
-				func( original ),
+				value( original ),
 				next( nullptr ) { }
 				
-				value_type func;
+				value_type value;
 				node_ptr next;
 			};
 			
