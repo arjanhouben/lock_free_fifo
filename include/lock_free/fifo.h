@@ -94,7 +94,7 @@ namespace lock_free
 			 */
 			bool empty() const
 			{
-				return start_ != nullptr;
+				return start_ == nullptr;
 			}
 			
 		private:
