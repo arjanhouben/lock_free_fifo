@@ -3,6 +3,7 @@
 #include <atomic>
 #include <memory>
 #include <vector>
+#include <map>
 
 namespace lock_free
 {
@@ -14,11 +15,11 @@ namespace lock_free
 	template < typename Value >
 	struct fifo_node_type
 	{
-		fifo_node_type( const Value &original ) :
-			value( original ),
-			next( nullptr ) { }
+//		fifo_node_type( const Value &original ) :
+//			value( new Value( original ) ),
+//			next( nullptr ) { }
 		
-		Value value;
+		Value *value;
 		fifo_node_type *next;
 	};
 	
@@ -30,11 +31,16 @@ namespace lock_free
 			typedef Value value_type;
 			typedef Allocator allocator_type;
 			typedef std::vector< value_type, allocator_type > vector_type;
+			typedef std::map< size_t, value_type > storage_type;
 			
 			fifo() :
-				start_(),
-				end_(),
-				allocator_() {}
+				read_( 0 ),
+				write_( 0 ),
+				stored_( 0 ),
+		storage_()
+		{
+			storage_.store( { false, new storage_type() } );
+		}
 		
 			~fifo()
 			{
@@ -48,16 +54,11 @@ namespace lock_free
 			template < typename T >
 			void push( T &&val )
 			{
-				node_ptr newnode = create_node( std::forward< T >( val ) );
-				
-				node_ptr tmp = nullptr;
-				start_.compare_exchange_strong( tmp, newnode );
-				
-				node_ptr prev_end = end_.exchange( newnode );
-				if ( prev_end )
-				{
-					prev_end->next = newnode;
-				}
+				hold();
+				size_t id = write_++;
+				(*storage_.load().lookup)[ id ] = val;
+				++stored_;
+				release();
 			}
 		
 			/**
@@ -68,8 +69,6 @@ namespace lock_free
 			{
 				auto assign = [ & ]( node_ptr ptr, value_type &value)
 				{
-					std::swap( value, ptr->value );
-					destroy_node( ptr );
 				};
 				return pop_generic( func, assign );
 			}
@@ -95,7 +94,6 @@ namespace lock_free
 			{
 				auto del = [ & ]( node_ptr ptr, value_type& )
 				{
-					destroy_node( ptr );
 				};
 				value_type tmp;
 				while ( pop_generic( tmp, del ) )
@@ -109,7 +107,7 @@ namespace lock_free
 			 */
 			bool empty() const
 			{
-				return start_ == nullptr;
+				return false;
 			}
 			
 		private:
@@ -122,39 +120,62 @@ namespace lock_free
 			fifo& operator = ( const fifo& );
 			
 			template < typename Assign >
-			bool pop_generic( value_type &func, Assign assign )
+			bool pop_generic( value_type &value, Assign assign )
 			{
-				node_ptr tmp = start_;
+				hold();
 				
-				while ( tmp )
+				const size_t id = read_++;
+				
+				if ( id >= stored_ )
 				{
-					if ( start_.compare_exchange_weak( tmp, tmp->next ) )
-					{
-						assign( tmp, func );
-						
-						return true;
-					}
-					// if we got here, tmp was set to the value of start_, so we try again
+					--read_;
+					
+					release();
+
+					try_cleanup();
+					
+					return false;
 				}
 				
-				return false;
+				value = (*storage_.load().lookup)[ id ];
+				
+				release();
+				
+				return true;
 			}
-			
-			template < typename T >
-			node_ptr create_node( T &&t )
+		
+			void try_cleanup()
 			{
-				node_ptr result = reinterpret_cast< node_ptr >( allocator_.allocate( 1 ) );
-				new ( result ) node_type( std::forward< T >( t ) );
-				return result;
+				storage tmp = { false, storage_.load().lookup };
+				storage clean = { false, new storage_type() };
+				if ( storage_.compare_exchange_strong( tmp, clean ) )
+				{
+					delete tmp.lookup;
+				}
+				else
+				{
+					delete clean.lookup;
+				}
 			}
-			
-			void destroy_node( node_ptr &t )
+		
+			void hold()
 			{
-				allocator_.destroy( t );
-				allocator_.deallocate( t, 1 );
+				storage_.exchange( { true, storage_.load().lookup } );
 			}
 			
-			node start_, end_;
-			allocator_type allocator_;
+			void release()
+			{
+				storage_.exchange( { false, storage_.load().lookup } );
+			}
+	
+			std::atomic_size_t read_, write_, stored_;
+		
+			struct storage
+			{
+				bool inuse_;
+				storage_type *lookup;
+			};
+		
+		std::atomic< storage >	storage_;
 	};
 }

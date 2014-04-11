@@ -28,7 +28,7 @@ int main( int argc, char *argv[] )
 {
 	jobqueue queue;
 
-	const auto expected = 1e7;
+	const auto expected = 1e5;
 
 	atomic_size_t actual( 0 );
 	for ( auto i = 0; i < expected; ++i )
