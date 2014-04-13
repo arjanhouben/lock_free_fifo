@@ -14,7 +14,7 @@ typedef function< void() > function_type;
 
 function_type go;
 
-typedef lock_free::fifo< function_type > jobqueue;
+typedef lock_free::fifo< function_type, 1024*1024*10 > jobqueue;
 
 template < typename T >
 T to( const string &str )
@@ -28,7 +28,7 @@ int main( int argc, char *argv[] )
 {
 	jobqueue queue;
 
-	const auto expected = 1e5;
+	const auto expected = 1e7;
 
 	atomic_size_t actual( 0 );
 	for ( auto i = 0; i < expected; ++i )
