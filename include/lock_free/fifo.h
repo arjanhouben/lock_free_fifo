@@ -5,31 +5,32 @@
 #include <vector>
 #include <array>
 
+#include <cassert>
+
 namespace lock_free
 {
 	/**
 	 * This is a lock free fifo, which can be used for multi-producer, multi-consumer
 	 * type job queue
 	 */
-	template < typename Value, size_t Size = 1024 >
+	template < typename Value >
 	class fifo
 	{
 		public:
 			
 			typedef Value value_type;
-			typedef std::array< value_type, Size > storage_type;
 			
-			fifo() :
+			fifo( size_t size = 1024 ) :
 				storage_()
 			{
-				static_assert( Size > 0, "fifo has to be initialized with a size of at least 1" );
-				storage_.store( { 0, 0, 0, new storage_type() } );
+//				static_assert( size > 0, "fifo has to be initialized with a size of at least 1" );
+				storage_.store( { 0, 0, 0, size, 0, new value_type[ size ] } );
 			}
 		
 			~fifo()
 			{
 				clear();
-				delete storage_.load().lookup;
+				delete [] storage_.load().lookup;
 			}
 			
 			/**
@@ -38,13 +39,16 @@ namespace lock_free
 			 */
 			void push( const value_type &val )
 			{
-				if ( storage_.load().write_ == Size )
+				claim_use();
+				storage tmp( storage_ );
+				if ( tmp.write_ == tmp.size )
 				{
-					throw std::logic_error( "fifo buffer full" );
+					tmp = resize_storage( tmp.size * 2 );
 				}
 				const size_t id = increase_write();
-				(*storage_.load().lookup).at( id ) = val;
+				tmp.lookup[ id ] = val;
 				increase_stored();
+				release_use();
 			}
 		
 			/**
@@ -105,18 +109,27 @@ namespace lock_free
 			template < typename Assign >
 			bool pop_generic( value_type &value, Assign assign )
 			{
+				claim_use();
+				
 				const size_t id = increase_read();
 				
-				if ( id >= storage_.load().stored_ )
+				storage tmp( storage_ );
+				
+				if ( id >= tmp.stored_ )
 				{
 					decrease_read();
 
-					try_cleanup();
+//					try_cleanup();
+					
+					release_use();
 					
 					return false;
 				}
 				
-				assign( value, (*storage_.load().lookup)[ id ] );
+				assert( tmp.size > id );
+				assign( value, tmp.lookup[ id ] );
+				
+				release_use();
 				
 				return true;
 			}
@@ -130,20 +143,27 @@ namespace lock_free
 					return;
 				}
 				
+				expected.inuse = 1;
+				
 				storage desired = {
 					0,
 					0,
 					0,
+					expected.size,
+					0,
 					expected.lookup
 				};
 				
-				storage_.compare_exchange_strong( expected, desired );
+				while ( !storage_.compare_exchange_weak( expected, desired ) )
+				{
+					expected.inuse = 1;
+				}
 			}
 		
 			struct storage
 			{
-				size_t read_, write_, stored_;
-				storage_type *lookup;
+				size_t read_, write_, stored_, size, inuse;
+				value_type *lookup;
 			};
 			
 			size_t increase_read()
@@ -201,6 +221,55 @@ namespace lock_free
 				auto ret = []( storage &value )
 				{
 					return value.stored_;
+				};
+				
+				change_storage< size_t >( inc, ret );
+			}
+		
+			storage resize_storage( size_t size )
+			{
+				storage expected( storage_ );
+				storage desired( expected );
+				desired.lookup = new value_type[ size ];
+				desired.size = size;
+				expected.inuse = 1;
+				for ( size_t i = 0; i < size / 2; ++i )
+				{
+					desired.lookup[ i ] = expected.lookup[ i ];
+				}
+				while ( !storage_.compare_exchange_weak( expected, desired ) )
+				{
+					expected.inuse = 1;
+				}
+				delete [] expected.lookup;
+				return storage_;
+			}
+			
+			void claim_use()
+			{
+				auto inc = []( storage &value )
+				{
+					++value.inuse;
+				};
+				
+				auto ret = []( storage &value )
+				{
+					return value.inuse;
+				};
+				
+				change_storage< size_t >( inc, ret );
+			}
+			
+			void release_use()
+			{
+				auto inc = []( storage &value )
+				{
+					--value.inuse;
+				};
+				
+				auto ret = []( storage &value )
+				{
+					return value.inuse;
 				};
 				
 				change_storage< size_t >( inc, ret );

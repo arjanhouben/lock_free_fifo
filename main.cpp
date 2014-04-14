@@ -14,7 +14,7 @@ typedef function< void() > function_type;
 
 function_type go;
 
-typedef lock_free::fifo< function_type, 1024*1024*10 > jobqueue;
+typedef lock_free::fifo< function_type > jobqueue;
 
 template < typename T >
 T to( const string &str )
