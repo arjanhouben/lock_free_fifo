@@ -3,6 +3,7 @@
 #include <atomic>
 #include <memory>
 #include <vector>
+#include <array>
 
 namespace lock_free
 {
@@ -10,25 +11,25 @@ namespace lock_free
 	 * This is a lock free fifo, which can be used for multi-producer, multi-consumer
 	 * type job queue
 	 */
-	template < typename Value, size_t InitialSize = 1024, typename Allocator = std::allocator< Value > >
+	template < typename Value, size_t Size = 1024 >
 	class fifo
 	{
 		public:
 			
 			typedef Value value_type;
-			typedef Allocator allocator_type;
-			typedef std::vector< value_type, allocator_type > storage_type;
+			typedef std::array< value_type, Size > storage_type;
 			
 			fifo() :
-		storage_()
-		{
-			static_assert( InitialSize > 0, "fifo has to be initialized with a size of at least 1" );
-			storage_.store( { 0, 0, 0, new storage_type( InitialSize ) } );
-		}
+				storage_()
+			{
+				static_assert( Size > 0, "fifo has to be initialized with a size of at least 1" );
+				storage_.store( { 0, 0, 0, new storage_type() } );
+			}
 		
 			~fifo()
 			{
 				clear();
+				delete storage_.load().lookup;
 			}
 			
 			/**
@@ -37,13 +38,12 @@ namespace lock_free
 			 */
 			void push( const value_type &val )
 			{
-				const size_t id = increase_write();
-				size_t storage_size = storage_.load().lookup->size();
-				while ( id >= storage_size )
+				if ( storage_.load().write_ == Size )
 				{
-					storage_size = resize_storage( storage_size * 2 );
+					throw std::logic_error( "fifo buffer full" );
 				}
-				(*storage_.load().lookup)[ id ] = val;
+				const size_t id = increase_write();
+				(*storage_.load().lookup).at( id ) = val;
 				increase_stored();
 			}
 		
@@ -61,10 +61,11 @@ namespace lock_free
 			}
 		
 			/**
-			 * clears the job queue, storing all pending jobs in the supplied vector.
-			 * the vector is also returned for convenience
+			 * clears the job queue, storing all pending jobs in the supplied container.
+			 * the container is also returned for convenience
 			 */
-			storage_type& pop_all( storage_type &unfinished )
+			template < typename T >
+			T& pop_all( T &unfinished )
 			{
 				value_type tmp;
 				while ( pop( tmp ) )
@@ -122,11 +123,8 @@ namespace lock_free
 		
 			void try_cleanup()
 			{
-				// not sure how to implement this safely..
-#if 0
 				storage expected = storage_;
-				if ( expected.lookup->empty() ||
-					expected.read_ != expected.write_ ||
+				if ( expected.read_ != expected.write_ ||
 					expected.read_ != expected.stored_ )
 				{
 					return;
@@ -136,14 +134,10 @@ namespace lock_free
 					0,
 					0,
 					0,
-					new storage_type()
+					expected.lookup
 				};
 				
-				if ( !storage_.compare_exchange_strong( expected, desired ) )
-				{
-					delete expected.lookup;
-				}
-#endif
+				storage_.compare_exchange_strong( expected, desired );
 			}
 		
 			struct storage
@@ -212,39 +206,6 @@ namespace lock_free
 				change_storage< size_t >( inc, ret );
 			}
 			
-			size_t resize_storage( size_t new_size )
-			{
-				while ( lock_.test_and_set( std::memory_order_acquire ) )
-				{
-					// empty
-				}
-				
-				storage expected = storage_;
-				
-				if ( expected.lookup->size() < new_size )
-				{
-					storage desired = expected;
-					desired.lookup = new storage_type( *desired.lookup );
-					desired.lookup->resize( new_size );
-					
-					while ( expected.lookup->size() < new_size )
-					{
-						if ( storage_.compare_exchange_weak( expected, desired ) )
-						{
-							lock_.clear( std::memory_order_release );
-							delete expected.lookup;
-							return new_size;
-						}
-					}
-					
-					delete desired.lookup;
-				}
-				
-				lock_.clear( std::memory_order_release );
-				
-				return expected.lookup->size();
-			}
-			
 			template < typename R, typename Adjust, typename Return >
 			R change_storage( Adjust a, Return r )
 			{
@@ -259,8 +220,7 @@ namespace lock_free
 					}
 				}
 			}
-			
-			std::atomic_flag lock_;
+		
 			std::atomic< storage >	storage_;
 	};
 }
