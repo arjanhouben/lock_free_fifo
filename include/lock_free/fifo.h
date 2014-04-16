@@ -7,6 +7,18 @@
 
 #include <cassert>
 
+template < typename T >
+void printbits( T t )
+{
+	size_t kak( sizeof( T ) * 8 );
+	std::cout << "0xb";
+	for ( int i = 0; i < kak; ++i )
+	{
+		std::cout << ( ( t & ( size_t( 1 ) << ( kak - 1 - i ) ) ) ? '1' : '0' );
+	}
+	std::cout << std::endl;
+}
+
 namespace lock_free
 {
 	/**
@@ -23,14 +35,18 @@ namespace lock_free
 			fifo( size_t size = 1024 ) :
 				storage_()
 			{
-//				static_assert( size > 0, "fifo has to be initialized with a size of at least 1" );
-				storage_.store( { 0, 0, 0, size, 0, new value_type[ size ] } );
+				// fix this so it doesn't leak when throw
+				value_type *lookup = new value_type[ size ];
+				std::atomic_size_t *bitflag = new std::atomic_size_t[ size / bits_per_section() ];
+				std::fill( bitflag, bitflag + size / bits_per_section(), 0 );
+				storage_.store( { 0, 0, 0, size, 0, lookup, bitflag } );
 			}
 		
 			~fifo()
 			{
 				clear();
 				delete [] storage_.load().lookup;
+				delete [] storage_.load().bitflag;
 			}
 			
 			/**
@@ -40,14 +56,16 @@ namespace lock_free
 			void push( const value_type &val )
 			{
 				claim_use();
-				storage tmp( storage_ );
-				if ( tmp.write_ == tmp.size )
-				{
-					tmp = resize_storage( tmp.size * 2 );
-				}
 				const size_t id = increase_write();
+				storage tmp( storage_ );
+				if ( id >= tmp.size )
+				{
+					tmp = resize_storage( id );
+				}
+				assert( id < tmp.size );
 				tmp.lookup[ id ] = val;
 				increase_stored();
+				set_bitflag( id );
 				release_use();
 			}
 		
@@ -105,6 +123,11 @@ namespace lock_free
 			
 			fifo( const fifo& );
 			fifo& operator = ( const fifo& );
+		
+		static constexpr size_t bits_per_section()
+		{
+			return sizeof( size_t ) * 8;
+		}
 			
 			template < typename Assign >
 			bool pop_generic( value_type &value, Assign assign )
@@ -115,7 +138,7 @@ namespace lock_free
 				
 				storage tmp( storage_ );
 				
-				if ( id >= tmp.stored_ )
+				if ( id >= tmp.write_ )
 				{
 					decrease_read();
 
@@ -127,7 +150,15 @@ namespace lock_free
 				}
 				
 				assert( tmp.size > id );
+				
+				while ( !unset_bitflag( id ) )
+				{
+					std::this_thread::yield();
+				}
+				
 				assign( value, tmp.lookup[ id ] );
+				
+				assert( value );
 				
 				release_use();
 				
@@ -164,6 +195,7 @@ namespace lock_free
 			{
 				size_t read_, write_, stored_, size, inuse;
 				value_type *lookup;
+				std::atomic_size_t *bitflag;
 			};
 			
 			size_t increase_read()
@@ -226,27 +258,70 @@ namespace lock_free
 				change_storage< size_t >( inc, ret );
 			}
 		
-			storage resize_storage( size_t size )
+			storage resize_storage( size_t id )
 			{
 				storage expected( storage_ );
-				storage desired( expected );
-				desired.lookup = new value_type[ size ];
-				desired.size = size;
-				expected.inuse = 1;
-				for ( size_t i = 0; i < size / 2; ++i )
+				if ( id == expected.size )
 				{
-					desired.lookup[ i ] = expected.lookup[ i ];
+					require_lock_ = true;
+					std::lock_guard< std::mutex > guard( lock_ );
+					
+					while ( expected.inuse > 1 )
+					{
+						std::this_thread::yield();
+						expected = storage_;
+					}
+					// prevent memory leak on throw
+					const size_t newsize = expected.size * 2;
+					value_type *lookup = new value_type[ newsize ];
+					std::atomic_size_t *bitflag = new std::atomic_size_t[ newsize / bits_per_section() ];
+					std::copy( expected.lookup, expected.lookup + expected.size, lookup );
+					for ( size_t i = 0; i < ( expected.size / bits_per_section() ); ++i )
+					{
+						bitflag[ i ].store( expected.bitflag[ i ] );
+					}
+//					std::copy( expected.bitflag, expected.bitflag + ( expected.size / bits_per_section() ), bitflag );
+//					std::fill( bitflag + ( expected.size / bits_per_section() ), bitflag + newsize / bits_per_section(), 0 );
+					
+					storage desired;
+//					do
+					{
+						expected.inuse = 1;
+						desired = expected;
+						desired.lookup = lookup;
+						desired.bitflag = bitflag;
+						desired.size = newsize;
+					}
+					if ( !storage_.compare_exchange_strong( expected, desired ) )
+					{
+						assert( false );
+					}
+					delete [] expected.lookup;
+					delete [] expected.bitflag;
+					require_lock_ = false;
 				}
-				while ( !storage_.compare_exchange_weak( expected, desired ) )
+				else
 				{
-					expected.inuse = 1;
+					release_use();
+					do
+					{
+						std::this_thread::yield();
+						expected = storage_;
+					}
+					while ( expected.size <= id );
+					claim_use();
 				}
-				delete [] expected.lookup;
 				return storage_;
 			}
-			
+		
 			void claim_use()
 			{
+				if ( require_lock_ )
+				{
+					lock_.lock();
+					lock_.unlock();
+				}
+				
 				auto inc = []( storage &value )
 				{
 					++value.inuse;
@@ -274,13 +349,54 @@ namespace lock_free
 				
 				change_storage< size_t >( inc, ret );
 			}
+		
+		void set_bitflag( size_t id )
+		{
+			const size_t offset = id / bits_per_section();
+			id -= offset * bits_per_section();
+			const size_t mask = size_t( 1 ) << id;
+
+			auto inc = [&]( storage &value )
+			{
+				std::atomic_fetch_or( value.bitflag + offset, mask );
+			};
+			
+			auto ret = [&]( storage &value )
+			{
+			};
+			
+			change_storage< void >( inc, ret );
+			
+		}
+		
+		bool unset_bitflag( size_t id )
+		{
+			const size_t offset = id / bits_per_section();
+			id -= offset * bits_per_section();
+			const size_t mask = size_t( 1 ) << id;
+			
+			bool result = false;
+			
+			auto inc = [&]( storage &value )
+			{
+				size_t old = std::atomic_fetch_and( &value.bitflag[ offset ], ~mask );
+				result = old & mask;
+			};
+			
+			auto ret = [&]( storage &value )
+			{
+				return result;
+			};
+			
+			return change_storage< bool >( inc, ret );
+		}
 			
 			template < typename R, typename Adjust, typename Return >
 			R change_storage( Adjust a, Return r )
 			{
+				storage expected = storage_;
 				for ( ;; )
 				{
-					storage expected = storage_;
 					storage desired = expected;
 					a( desired );
 					if ( storage_.compare_exchange_weak( expected, desired ) )
@@ -290,6 +406,8 @@ namespace lock_free
 				}
 			}
 		
+			std::atomic_bool require_lock_;
+			std::mutex lock_;
 			std::atomic< storage >	storage_;
 	};
 }
