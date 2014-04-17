@@ -48,7 +48,7 @@ int main( int argc, char *argv[] )
 		{
 			data_type( size_t e ) :
 				expected( e ),
-				queue( e ),
+				queue(),
 				producer_count( 0 ),
 				consumer_count( 0 ) { }
 			const size_t expected;
@@ -94,6 +94,17 @@ int main( int argc, char *argv[] )
 
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 20;
 	
+	// single producer, single consumer
+	if(1){
+		auto pcr = create_producer_consumer_result();
+		
+		get_producer( pcr )();
+		
+		get_consumer( pcr )();
+		
+		get_result( pcr )();
+	}
+	
 	// single producer, multi consumer
 	if(1){
 		auto pcr = create_producer_consumer_result();
@@ -116,7 +127,7 @@ int main( int argc, char *argv[] )
 	}
 	
 	// multi producer, single consumer
-	if(0){
+	if(1){
 		auto pcr = create_producer_consumer_result();
 		
 		vector< thread > threads;
