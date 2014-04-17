@@ -3,7 +3,7 @@
 #include <atomic>
 #include <memory>
 #include <vector>
-
+#include <mutex>
 #include <cassert>
 
 namespace lock_free
@@ -181,33 +181,37 @@ namespace lock_free
 		
 			void try_cleanup()
 			{
-				if ( !write_ || read_ != write_ || require_lock_.test_and_set() )
+				if ( !write_ || read_ != write_ || require_lock_ )
 				{
 					// early exit, avoids needless locking
 					return;
 				}
 				
-				std::lock_guard< std::mutex > guard( lock_ );
-				
-				while ( concurrent_users_() > 1 )
+				bool expected( false );
+				if ( require_lock_.compare_exchange_strong( expected, true ) )
 				{
-					std::this_thread::yield();
+					std::lock_guard< std::mutex > guard( lock_ );
+					
+					while ( concurrent_users_() > 1 )
+					{
+						std::this_thread::yield();
+					}
+					
+					write_ = 0;
+					read_ = 0;
+					fill_bitflags( 0 );
+					
+					lookup_.clear();
+					
+					require_lock_ = false;
 				}
-				
-				write_ = 0;
-				read_ = 0;
-				fill_bitflags( 0 );
-				
-				lookup_.clear();
-				
-				require_lock_.clear();
 			}
 	
 			void resize_storage( size_t id )
 			{
 				if ( id == size_ )
 				{
-					require_lock_.test_and_set();
+					require_lock_ = true;
 					
 					std::lock_guard< std::mutex > guard( lock_ );
 					
@@ -233,7 +237,7 @@ namespace lock_free
 					
 					size_ = lookup_.size();
 					
-					require_lock_.clear();
+					require_lock_ = false;
 				}
 				else
 				{
@@ -269,14 +273,10 @@ namespace lock_free
 			
 			void conditional_lock()
 			{
-				if ( require_lock_.test_and_set() )
+				if ( require_lock_ )
 				{
 					lock_.lock();
 					lock_.unlock();
-				}
-				else
-				{
-					require_lock_.clear();
 				}
 			}
 		
@@ -290,7 +290,7 @@ namespace lock_free
 				}
 			}
 		
-			std::atomic_flag require_lock_;
+			std::atomic_bool require_lock_;
 			std::mutex lock_;
 		
 			use_count< std::atomic_size_t > concurrent_users_;
