@@ -35,30 +35,6 @@ namespace lock_free
 			T data_;
 	};
 	
-	template <>
-	class use_count< std::atomic_bool >
-	{
-		public:
-			
-			template < typename V >
-			use_count( V &&v ) :
-				data_( std::forward< V >( v ) ) { }
-			
-			bool operator ()() const { return data_; }
-			
-			void lock() { data_ = true; }
-			
-			void unlock() { data_ = false; }
-			
-		private:
-			
-			use_count( const use_count& );
-			
-			use_count& operator = ( const use_count& );
-			
-			std::atomic_bool data_;
-	};
-	
 	/**
 	 * This is a lock free fifo, which can be used for multi-producer, multi-consumer
 	 * type job queue
@@ -205,13 +181,12 @@ namespace lock_free
 		
 			void try_cleanup()
 			{
-				if ( !write_ || read_ != write_ )
+				if ( !write_ || read_ != write_ || require_lock_.test_and_set() )
 				{
 					// early exit, avoids needless locking
 					return;
 				}
 				
-				std::lock_guard< use_count< std::atomic_bool > > rlock( require_lock_ );
 				std::lock_guard< std::mutex > guard( lock_ );
 				
 				while ( concurrent_users_() > 1 )
@@ -224,13 +199,16 @@ namespace lock_free
 				fill_bitflags( 0 );
 				
 				lookup_.clear();
+				
+				require_lock_.clear();
 			}
 	
 			void resize_storage( size_t id )
 			{
 				if ( id == size_ )
 				{
-					std::lock_guard< use_count< std::atomic_bool > > rlock( require_lock_ );
+					require_lock_.test_and_set();
+					
 					std::lock_guard< std::mutex > guard( lock_ );
 					
 					while ( concurrent_users_() > 1 )
@@ -254,6 +232,8 @@ namespace lock_free
 					bitflag_ = newbitflag;
 					
 					size_ = lookup_.size();
+					
+					require_lock_.clear();
 				}
 				else
 				{
@@ -289,10 +269,14 @@ namespace lock_free
 			
 			void conditional_lock()
 			{
-				if ( require_lock_() )
+				if ( require_lock_.test_and_set() )
 				{
 					lock_.lock();
 					lock_.unlock();
+				}
+				else
+				{
+					require_lock_.clear();
 				}
 			}
 		
@@ -306,7 +290,7 @@ namespace lock_free
 				}
 			}
 		
-			use_count< std::atomic_bool > require_lock_;
+			std::atomic_flag require_lock_;
 			std::mutex lock_;
 		
 			use_count< std::atomic_size_t > concurrent_users_;
