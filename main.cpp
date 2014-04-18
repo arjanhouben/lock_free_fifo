@@ -93,7 +93,7 @@ int main( int argc, char *argv[] )
 	};
 
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 20;
-	
+
 	// single producer, single consumer
 	if(1){
 		auto pcr = create_producer_consumer_result();
@@ -143,6 +143,26 @@ int main( int argc, char *argv[] )
 		}
 		
 		get_consumer( pcr )();
+		
+		get_result( pcr )();
+	}
+	
+	// multi producer, multi consumer
+	if(1){
+		auto pcr = create_producer_consumer_result();
+		
+		vector< thread > threads;
+		size_t c = thread_count / 2;
+		while ( c-- )
+		{
+			threads.push_back( thread( get_producer( pcr ) ) );
+			threads.push_back( thread( get_consumer( pcr ) ) );
+		}
+		
+		for ( auto &t : threads )
+		{
+			t.join();
+		}
 		
 		get_result( pcr )();
 	}

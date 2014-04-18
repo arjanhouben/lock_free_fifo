@@ -71,9 +71,9 @@ namespace lock_free
 			 */
 			void push( const value_type &value )
 			{
-				conditional_lock();
-				
 				std::lock_guard< use_count< std::atomic_size_t > > lock( concurrent_users_ );
+				
+				conditional_lock();
 				
 				const size_t id = write_++;
 				if ( id >= size_ )
@@ -85,7 +85,9 @@ namespace lock_free
 
 				lookup_[ id ] = value;
 				
-				set_bitflag_( id );
+				assert( lookup_[ id ] );
+				
+				set_bitflag_( id, mask_for_id( id ) );
 			}
 		
 			/**
@@ -150,9 +152,9 @@ namespace lock_free
 			template < typename Assign >
 			bool pop_generic( value_type &value, Assign assign )
 			{
-				conditional_lock();
-				
 				std::lock_guard< use_count< std::atomic_size_t > > lock( concurrent_users_ );
+				
+				conditional_lock();
 				
 				const size_t id = read_++;
 				
@@ -164,17 +166,18 @@ namespace lock_free
 					
 					return false;
 				}
-				
-				while ( !unset_bitflag_( id ) )
+
+				const size_t mask = mask_for_id( id );
+				while ( !unset_bitflag_( id, mask ) )
 				{
 					std::this_thread::yield();
 				}
 				
+				assert( lookup_[ id ] );
+				
 				assert( size_ > id );
 				
 				assign( value, lookup_[ id ] );
-				
-				assert( value );
 				
 				return true;
 			}
@@ -209,46 +212,47 @@ namespace lock_free
 	
 			void resize_storage( size_t id )
 			{
-				if ( id == size_ )
+				while ( size_ <= id )
 				{
-					require_lock_ = true;
-					
-					std::lock_guard< std::mutex > guard( lock_ );
-					
-					while ( concurrent_users_() > 1 )
+					if ( id == size_ )
 					{
-						std::this_thread::yield();
+						require_lock_ = true;
+						
+						std::lock_guard< std::mutex > guard( lock_ );
+						
+						while ( concurrent_users_() > 1 )
+						{
+							std::this_thread::yield();
+						}
+						
+						const size_t bitflag_size = size_ / bits_per_section();
+						
+						lookup_.resize( std::max( size_t( 1 ), size_ * 2 ) );
+						
+						std::atomic_size_t *newbitflag = new std::atomic_size_t[ std::max( size_t( 1 ), bitflag_size * 2 ) ];
+						std::atomic_size_t *start = newbitflag;
+						const std::atomic_size_t *end = start + bitflag_size;
+						const std::atomic_size_t *src = bitflag_;
+						while ( start != end )
+						{
+							(start++)->store( *src++ );
+						}
+						end = newbitflag + bitflag_size * 2;
+						while ( start != end )
+						{
+							(start++)->store( 0 );
+						}
+						delete [] bitflag_;
+						bitflag_ = newbitflag;
+						
+						size_ = lookup_.size();
+						
+						require_lock_ = false;
 					}
-					
-					const size_t bitflag_size = size_ / bits_per_section();
-					
-					lookup_.resize( std::max( size_t( 1 ), size_ * 2 ) );
-					
-					std::atomic_size_t *newbitflag = new std::atomic_size_t[ std::max( size_t( 1 ), bitflag_size * 2 ) ];
-					std::atomic_size_t *start = newbitflag;
-					const std::atomic_size_t *end = start + bitflag_size;
-					const std::atomic_size_t *src = bitflag_;
-					while ( start != end )
+					else
 					{
-						(start++)->store( *src++ );
+						conditional_lock();
 					}
-					delete [] bitflag_;
-					bitflag_ = newbitflag;
-					
-					size_ = lookup_.size();
-					
-					require_lock_ = false;
-				}
-				else
-				{
-					concurrent_users_.unlock();
-					
-					while ( size_ <= id )
-					{
-						std::this_thread::yield();
-					}
-					
-					concurrent_users_.lock();
 				}
 			}
 			
@@ -259,24 +263,31 @@ namespace lock_free
 				return size_t( 1 ) << id;
 			}
 		
-			void set_bitflag_( size_t id )
+			void set_bitflag_( size_t id, size_t mask )
 			{
-				bitflag_[ id / bits_per_section() ].fetch_or( mask_for_id( id ) );
+//				static std::mutex das;
+//				std::lock_guard< std::mutex > lok( das );
+
+				bitflag_[ id / bits_per_section() ].fetch_or( mask );
 			}
 			
-			bool unset_bitflag_( size_t id )
+			bool unset_bitflag_( size_t id, size_t mask )
 			{
-				const size_t mask = mask_for_id( id );
+//				static std::mutex das;
+//				std::lock_guard< std::mutex > lok( das );
+				
 				const size_t old = bitflag_[ id / bits_per_section() ].fetch_and( ~mask );
-				return old & mask;
+				return ( old & mask ) == mask;
 			}
 			
 			void conditional_lock()
 			{
 				if ( require_lock_ )
 				{
+					concurrent_users_.unlock();
 					lock_.lock();
 					lock_.unlock();
+					concurrent_users_.lock();
 				}
 			}
 		
