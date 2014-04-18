@@ -5,10 +5,12 @@
 
 #include <atomic>
 #include <vector>
+#include <chrono>
 
 #include "include/lock_free/fifo.h"
 
 using namespace std;
+using namespace chrono;
 
 typedef function< void() > function_type;
 
@@ -42,7 +44,7 @@ function_type get_result( T &&t )
 
 int main( int argc, char *argv[] )
 {
-	auto create_producer_consumer_result = []()
+	auto create_producer_consumer_result = []( const string &name )
 	{
 		struct data_type
 		{
@@ -56,6 +58,8 @@ int main( int argc, char *argv[] )
 			atomic_size_t producer_count;
 			atomic_size_t consumer_count;
 		};
+		
+		high_resolution_clock::time_point t1 = high_resolution_clock::now();
 		
 		auto data = make_shared< data_type >( 1e6 );
 		
@@ -84,9 +88,14 @@ int main( int argc, char *argv[] )
 			}
 		};
 		
-		auto result = [data]()
+		auto result = [=]()
 		{
+			high_resolution_clock::time_point t2 = high_resolution_clock::now();
+			
+			duration< double > time_span = duration_cast< duration< double > >(t2 - t1);
+			
 			cout << "expected: " << data->expected << ", actual: " << data->consumer_count << endl;
+			cout << name << " took: " << time_span.count() << " seconds" << endl;
 		};
 		
 		return make_tuple( producer, consumer, result );
@@ -95,8 +104,8 @@ int main( int argc, char *argv[] )
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 20;
 
 	// single producer, single consumer
-	if(1){
-		auto pcr = create_producer_consumer_result();
+	{
+		auto pcr = create_producer_consumer_result( "single producer, single consumer" );
 		
 		get_producer( pcr )();
 		
@@ -106,8 +115,8 @@ int main( int argc, char *argv[] )
 	}
 	
 	// single producer, multi consumer
-	if(1){
-		auto pcr = create_producer_consumer_result();
+	{
+		auto pcr = create_producer_consumer_result( "single producer, multi consumer" );
 		
 		get_producer( pcr )();
 		
@@ -127,8 +136,8 @@ int main( int argc, char *argv[] )
 	}
 	
 	// multi producer, single consumer
-	if(1){
-		auto pcr = create_producer_consumer_result();
+	{
+		auto pcr = create_producer_consumer_result( "multi producer, single consumer" );
 		
 		vector< thread > threads;
 		size_t c = thread_count;
@@ -148,8 +157,8 @@ int main( int argc, char *argv[] )
 	}
 	
 	// multi producer, multi consumer
-	if(1){
-		auto pcr = create_producer_consumer_result();
+	{
+		auto pcr = create_producer_consumer_result( "multi producer, multi consumer" );
 		
 		vector< thread > threads;
 		size_t c = thread_count / 2;

@@ -5,6 +5,7 @@
 #include <vector>
 #include <mutex>
 #include <cassert>
+#include <thread>
 
 namespace lock_free
 {
