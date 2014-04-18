@@ -204,8 +204,6 @@ namespace lock_free
 					read_ = 0;
 					fill_bitflags( 0 );
 					
-					lookup_.clear();
-					
 					require_lock_ = false;
 				}
 			}
