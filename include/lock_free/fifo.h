@@ -36,6 +36,22 @@ namespace lock_free
 			T data_;
 	};
 	
+	void fill_atomic_array( std::atomic_size_t *start, std::atomic_size_t *end, size_t value )
+	{
+		while ( start != end )
+		{
+			(start++)->store( value );
+		}
+	}
+	
+	void copy_atomic_array( const std::atomic_size_t *start, const std::atomic_size_t *end, std::atomic_size_t *dst )
+	{
+		while ( start != end )
+		{
+			(dst++)->store( *start++ );
+		}
+	}
+	
 	/**
 	 * This is a lock free fifo, which can be used for multi-producer, multi-consumer
 	 * type job queue
@@ -46,6 +62,9 @@ namespace lock_free
 		public:
 		
 			typedef Value value_type;
+			typedef std::lock_guard< use_count< std::atomic_size_t > > use_guard;
+			typedef std::lock_guard< std::mutex > mutex_guard;
+			typedef std::unique_ptr< std::atomic_size_t[] > atomic_array;
 			
 			fifo( size_t size = 1024 ) :
 				require_lock_( false ),
@@ -55,13 +74,13 @@ namespace lock_free
 				write_( 0 ),
 				size_( size ),
 				storage_( size ),
-				bitflag_( new std::atomic_size_t[ std::max( size_t( 1 ), size / bits_per_section() ) ] )
+				bitflag_()
 			{
-				fill_bitflags( 0 );
-			}
-		
-			~fifo()
-			{
+				const size_t bitflag_size = std::max( size_t( 1 ), size / bits_per_section() );
+			
+				bitflag_ = atomic_array( new std::atomic_size_t[ bitflag_size ] );
+			
+				fill_atomic_array( bitflag_.get(), bitflag_.get() + bitflag_size, 0 );
 			}
 			
 			/**
@@ -70,7 +89,7 @@ namespace lock_free
 			 */
 			void push( const value_type &value )
 			{
-				std::lock_guard< use_count< std::atomic_size_t > > lock( concurrent_users_ );
+				use_guard lock( concurrent_users_ );
 				
 				conditional_lock();
 				
@@ -152,7 +171,7 @@ namespace lock_free
 			template < typename Assign >
 			bool pop_generic( value_type &value, Assign assign )
 			{
-				std::lock_guard< use_count< std::atomic_size_t > > lock( concurrent_users_ );
+				use_guard lock( concurrent_users_ );
 				
 				conditional_lock();
 				
@@ -189,7 +208,7 @@ namespace lock_free
 				bool expected( false );
 				if ( require_lock_.compare_exchange_strong( expected, true ) )
 				{
-					std::lock_guard< std::mutex > guard( lock_ );
+					mutex_guard guard( lock_ );
 					
 					while ( concurrent_users_() > 1 )
 					{
@@ -198,7 +217,7 @@ namespace lock_free
 					
 					write_ = 0;
 					read_ = 0;
-					fill_bitflags( 0 );
+					fill_atomic_array( bitflag_.get(), bitflag_.get() + size_ / bits_per_section(), 0 );
 					
 					require_lock_ = false;
 				}
@@ -212,7 +231,7 @@ namespace lock_free
 					{
 						require_lock_ = true;
 						
-						std::lock_guard< std::mutex > guard( lock_ );
+						mutex_guard guard( lock_ );
 						
 						while ( concurrent_users_() > 1 )
 						{
@@ -223,19 +242,12 @@ namespace lock_free
 						
 						storage_.resize( std::max( size_t( 1 ), size_ * 2 ) );
 						
-						std::unique_ptr< std::atomic_size_t[] > newbitflag( new std::atomic_size_t[ std::max( size_t( 1 ), bitflag_size * 2 ) ] );
-						std::atomic_size_t *start = newbitflag.get();
-						const std::atomic_size_t *end = start + bitflag_size;
-						const std::atomic_size_t *src = bitflag_.get();
-						while ( start != end )
-						{
-							(start++)->store( *src++ );
-						}
-						end = newbitflag.get() + bitflag_size * 2;
-						while ( start != end )
-						{
-							(start++)->store( 0 );
-						}
+						atomic_array newbitflag( new std::atomic_size_t[ std::max( size_t( 1 ), bitflag_size * 2 ) ] );
+						
+						copy_atomic_array( bitflag_.get(), bitflag_.get() + bitflag_size, newbitflag.get() );
+						
+						fill_atomic_array( newbitflag.get() + bitflag_size, newbitflag.get() + bitflag_size * 2, 0 );
+						
 						std::swap( bitflag_, newbitflag );
 						
 						size_ = storage_.size();
@@ -248,22 +260,26 @@ namespace lock_free
 					}
 				}
 			}
+		
+			static size_t offset_for_id( size_t id )
+			{
+				return id / bits_per_section();
+			}
 			
 			static size_t mask_for_id( size_t id )
 			{
-				const size_t offset = id / bits_per_section();
-				id -= offset * bits_per_section();
+				id -= offset_for_id( id ) * bits_per_section();
 				return size_t( 1 ) << id;
 			}
 		
 			void set_bitflag_( size_t id, size_t mask )
 			{
-				bitflag_[ id / bits_per_section() ].fetch_or( mask );
+				bitflag_[ offset_for_id( id ) ].fetch_or( mask );
 			}
 			
 			bool unset_bitflag_( size_t id, size_t mask )
 			{
-				const size_t old = bitflag_[ id / bits_per_section() ].fetch_and( ~mask );
+				const size_t old = bitflag_[ offset_for_id( id ) ].fetch_and( ~mask );
 				return ( old & mask ) == mask;
 			}
 			
@@ -278,22 +294,12 @@ namespace lock_free
 				}
 			}
 		
-			void fill_bitflags( size_t value )
-			{
-				std::atomic_size_t *start = &bitflag_[ 0 ];
-				const std::atomic_size_t *end = start + size_ / bits_per_section();
-				while ( start != end )
-				{
-					(start++)->store( value );
-				}
-			}
-		
 			std::atomic_bool require_lock_;
 			std::mutex lock_;
 		
 			use_count< std::atomic_size_t > concurrent_users_;
 			std::atomic_size_t read_, write_, size_;
 			std::vector< value_type > storage_;
-			std::unique_ptr< std::atomic_size_t[] > bitflag_;
+			atomic_array bitflag_;
 	};
 }
