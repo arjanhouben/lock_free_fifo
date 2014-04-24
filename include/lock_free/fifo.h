@@ -4,8 +4,8 @@
 #include <memory>
 #include <vector>
 #include <mutex>
-#include <cassert>
 #include <thread>
+#include <algorithm>
 
 namespace lock_free
 {
@@ -54,7 +54,7 @@ namespace lock_free
 				read_( 0 ),
 				write_( 0 ),
 				size_( size ),
-				lookup_( size ),
+				storage_( size ),
 				bitflag_( new std::atomic_size_t[ std::max( size_t( 1 ), size / bits_per_section() ) ] )
 			{
 				fill_bitflags( 0 );
@@ -62,8 +62,6 @@ namespace lock_free
 		
 			~fifo()
 			{
-				clear();
-				delete [] bitflag_;
 			}
 			
 			/**
@@ -76,17 +74,18 @@ namespace lock_free
 				
 				conditional_lock();
 				
+				if ( write_ == std::numeric_limits< size_t >::max() )
+				{
+					throw std::logic_error( "fifo full, remove some jobs before adding new ones" );
+				}
+				
 				const size_t id = write_++;
 				if ( id >= size_ )
 				{
 					resize_storage( id );
 				}
-				
-				assert( id < size_ );
 
-				lookup_[ id ] = value;
-				
-				assert( lookup_[ id ] );
+				storage_[ id ] = value;
 				
 				set_bitflag_( id, mask_for_id( id ) );
 			}
@@ -174,11 +173,7 @@ namespace lock_free
 					std::this_thread::yield();
 				}
 				
-				assert( lookup_[ id ] );
-				
-				assert( size_ > id );
-				
-				assign( value, lookup_[ id ] );
+				assign( value, storage_[ id ] );
 				
 				return true;
 			}
@@ -226,25 +221,24 @@ namespace lock_free
 						
 						const size_t bitflag_size = size_ / bits_per_section();
 						
-						lookup_.resize( std::max( size_t( 1 ), size_ * 2 ) );
+						storage_.resize( std::max( size_t( 1 ), size_ * 2 ) );
 						
-						std::atomic_size_t *newbitflag = new std::atomic_size_t[ std::max( size_t( 1 ), bitflag_size * 2 ) ];
-						std::atomic_size_t *start = newbitflag;
+						std::unique_ptr< std::atomic_size_t[] > newbitflag( new std::atomic_size_t[ std::max( size_t( 1 ), bitflag_size * 2 ) ] );
+						std::atomic_size_t *start = newbitflag.get();
 						const std::atomic_size_t *end = start + bitflag_size;
-						const std::atomic_size_t *src = bitflag_;
+						const std::atomic_size_t *src = bitflag_.get();
 						while ( start != end )
 						{
 							(start++)->store( *src++ );
 						}
-						end = newbitflag + bitflag_size * 2;
+						end = newbitflag.get() + bitflag_size * 2;
 						while ( start != end )
 						{
 							(start++)->store( 0 );
 						}
-						delete [] bitflag_;
-						bitflag_ = newbitflag;
+						std::swap( bitflag_, newbitflag );
 						
-						size_ = lookup_.size();
+						size_ = storage_.size();
 						
 						require_lock_ = false;
 					}
@@ -264,17 +258,11 @@ namespace lock_free
 		
 			void set_bitflag_( size_t id, size_t mask )
 			{
-//				static std::mutex das;
-//				std::lock_guard< std::mutex > lok( das );
-
 				bitflag_[ id / bits_per_section() ].fetch_or( mask );
 			}
 			
 			bool unset_bitflag_( size_t id, size_t mask )
 			{
-//				static std::mutex das;
-//				std::lock_guard< std::mutex > lok( das );
-				
 				const size_t old = bitflag_[ id / bits_per_section() ].fetch_and( ~mask );
 				return ( old & mask ) == mask;
 			}
@@ -292,7 +280,7 @@ namespace lock_free
 		
 			void fill_bitflags( size_t value )
 			{
-				std::atomic_size_t *start = bitflag_;
+				std::atomic_size_t *start = &bitflag_[ 0 ];
 				const std::atomic_size_t *end = start + size_ / bits_per_section();
 				while ( start != end )
 				{
@@ -305,7 +293,7 @@ namespace lock_free
 		
 			use_count< std::atomic_size_t > concurrent_users_;
 			std::atomic_size_t read_, write_, size_;
-			std::vector< value_type > lookup_;
-			std::atomic_size_t *bitflag_;
+			std::vector< value_type > storage_;
+			std::unique_ptr< std::atomic_size_t[] > bitflag_;
 	};
 }
