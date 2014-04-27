@@ -7,33 +7,76 @@
 #include <thread>
 #include <algorithm>
 
+#include <cassert>
+
 namespace lock_free
 {
-	/**
-	 * this class is used so we're able to use the RAII mechanism for locking
-	 */
-	template < typename T >
-	class use_count
+	class shared_mutex
 	{
 		public:
+		
+			static const size_t locked = size_t( 1 ) << ( sizeof( size_t ) * 8 - 1 );
+		
+			void lock()
+			{
+				lock_required_.fetch_or( locked );
+				
+				mutex_.lock();
+			}
 			
-			template < typename V >
-			use_count( V &&v ) :
-			data_( std::forward< V >( v ) ) { }
-			
-			const T& operator()() const { return data_; }
-			
-			void lock() { ++data_; }
-			
-			void unlock() { --data_; }
-			
+			void unlock()
+			{
+				lock_required_.fetch_and( ~locked );
+				
+				mutex_.unlock();
+			}
+		
+			void lock_shared()
+			{
+				if ( ++lock_required_ & locked )
+				{
+					--lock_required_;
+					mutex_.lock();
+					mutex_.unlock();
+					++lock_required_;
+				}
+			}
+		
+			void unlock_shared()
+			{
+				--lock_required_;
+			}
+		
+			void wait_maximum_users( size_t users )
+			{
+				// wait until there are no more than a certain amount of users active
+				while ( ( lock_required_ & ( ~locked ) ) > users )
+				{
+					std::this_thread::yield();
+				}
+			}
+		
 		private:
+		
+			std::atomic_size_t lock_required_;
+			std::mutex mutex_;
+	};
+	
+	class shared_lock_guard
+	{
+		public:
+			shared_lock_guard( shared_mutex &m ) :
+				m_( m )
+			{
+				m_.lock_shared();
+			}
 			
-			use_count( const use_count& );
-			
-			use_count& operator = ( const use_count& );
-			
-			T data_;
+			~shared_lock_guard()
+			{
+				m_.unlock_shared();
+			}
+		private:
+			shared_mutex &m_;
 	};
 	
 	void fill_atomic_array( std::atomic_size_t *start, std::atomic_size_t *end, size_t value )
@@ -62,14 +105,11 @@ namespace lock_free
 		public:
 		
 			typedef Value value_type;
-			typedef std::lock_guard< use_count< std::atomic_size_t > > use_guard;
-			typedef std::lock_guard< std::mutex > mutex_guard;
+			typedef std::lock_guard< shared_mutex > mutex_guard;
 			typedef std::unique_ptr< std::atomic_size_t[] > atomic_array;
 			
 			fifo( size_t size = 1024 ) :
-				require_lock_( false ),
 				lock_(),
-				concurrent_users_( 0 ),
 				read_( 0 ),
 				write_( 0 ),
 				size_( size ),
@@ -77,7 +117,7 @@ namespace lock_free
 				bitflag_()
 			{
 				const size_t bitflag_size = std::max( size_t( 1 ), size / bits_per_section() );
-			
+
 				bitflag_ = atomic_array( new std::atomic_size_t[ bitflag_size ] );
 			
 				fill_atomic_array( bitflag_.get(), bitflag_.get() + bitflag_size, 0 );
@@ -89,10 +129,8 @@ namespace lock_free
 			 */
 			void push( const value_type &value )
 			{
-				use_guard lock( concurrent_users_ );
-				
-				conditional_lock();
-				
+				shared_lock_guard lock( lock_ );
+			
 				if ( write_ == std::numeric_limits< size_t >::max() )
 				{
 					throw std::logic_error( "fifo full, remove some jobs before adding new ones" );
@@ -171,17 +209,16 @@ namespace lock_free
 			template < typename Assign >
 			bool pop_generic( value_type &value, Assign assign )
 			{
-				use_guard lock( concurrent_users_ );
 				
-				conditional_lock();
-				
+				shared_lock_guard lock( lock_ );
+			
 				const size_t id = read_++;
 				
 				if ( id >= write_ )
 				{
+					try_cleanup( id );
+					
 					--read_;
-
-					try_cleanup();
 					
 					return false;
 				}
@@ -189,7 +226,9 @@ namespace lock_free
 				const size_t mask = mask_for_id( id );
 				while ( !unset_bitflag_( id, mask ) )
 				{
+					lock_.unlock_shared();
 					std::this_thread::yield();
+					lock_.lock_shared();
 				}
 				
 				assign( value, storage_[ id ] );
@@ -197,30 +236,28 @@ namespace lock_free
 				return true;
 			}
 		
-			void try_cleanup()
-			{
-				if ( !write_ || read_ != write_ || require_lock_ )
+			void try_cleanup( size_t id )
+		{
+			return;
+			lock_.unlock_shared();
+				if ( id == write_ && write_ )
 				{
-					// early exit, avoids needless locking
-					return;
-				}
-				
-				bool expected( false );
-				if ( require_lock_.compare_exchange_strong( expected, true ) )
-				{
+					
 					mutex_guard guard( lock_ );
 					
-					while ( concurrent_users_() > 1 )
+					std::cout << "CLEANUP " << std::endl;
+					
+					for ( size_t i = 0; i < write_; ++i )
 					{
-						std::this_thread::yield();
+						size_t kak = bitflag_[ offset_for_id( i ) ];
+						assert( !( kak & mask_for_id( i ) ) );
 					}
 					
+					read_ -= write_;
 					write_ = 0;
-					read_ = 0;
-					fill_atomic_array( bitflag_.get(), bitflag_.get() + size_ / bits_per_section(), 0 );
-					
-					require_lock_ = false;
 				}
+				
+				lock_.lock_shared();
 			}
 	
 			void resize_storage( size_t id )
@@ -229,34 +266,44 @@ namespace lock_free
 				{
 					if ( id == size_ )
 					{
-						require_lock_ = true;
-						
-						mutex_guard guard( lock_ );
-						
-						while ( concurrent_users_() > 1 )
-						{
-							std::this_thread::yield();
-						}
+						const size_t newsize = std::max( size_t( 1 ), size_ * 2 );
 						
 						const size_t bitflag_size = size_ / bits_per_section();
 						
-						storage_.resize( std::max( size_t( 1 ), size_ * 2 ) );
+						const size_t new_bitflag_size = std::max( size_t( 1 ), newsize / bits_per_section() );
 						
-						atomic_array newbitflag( new std::atomic_size_t[ std::max( size_t( 1 ), bitflag_size * 2 ) ] );
+						atomic_array newbitflag( new std::atomic_size_t[ new_bitflag_size ] );
+						
+						fill_atomic_array( newbitflag.get() + bitflag_size, newbitflag.get() + new_bitflag_size, 0 );
+						
+						/// lock
+						std::lock_guard< std::mutex > gnoe( das );
+						
+						
+						mutex_guard guard( lock_ );
+						
+						// we own a shared lock, so wait until we are the only user
+						lock_.wait_maximum_users( 1 );
+						
+						storage_.resize( newsize );
 						
 						copy_atomic_array( bitflag_.get(), bitflag_.get() + bitflag_size, newbitflag.get() );
 						
-						fill_atomic_array( newbitflag.get() + bitflag_size, newbitflag.get() + bitflag_size * 2, 0 );
+//						for ( size_t i = 0; i < id; ++i )
+//						{
+//							assert( ( bitflag_[ offset_for_id( i ) ] & mask_for_id( i ) ) );
+//						}
 						
 						std::swap( bitflag_, newbitflag );
 						
 						size_ = storage_.size();
-						
-						require_lock_ = false;
 					}
 					else
 					{
-						conditional_lock();
+						lock_.unlock_shared();
+//						std::this_thread::yield();
+						std::lock_guard< std::mutex > gnoe( das );
+						lock_.lock_shared();
 					}
 				}
 			}
@@ -282,22 +329,11 @@ namespace lock_free
 				const size_t old = bitflag_[ offset_for_id( id ) ].fetch_and( ~mask );
 				return ( old & mask ) == mask;
 			}
+		
+			shared_mutex lock_;
+		
+		std::mutex das;
 			
-			void conditional_lock()
-			{
-				if ( require_lock_ )
-				{
-					concurrent_users_.unlock();
-					lock_.lock();
-					lock_.unlock();
-					concurrent_users_.lock();
-				}
-			}
-		
-			std::atomic_bool require_lock_;
-			std::mutex lock_;
-		
-			use_count< std::atomic_size_t > concurrent_users_;
 			std::atomic_size_t read_, write_, size_;
 			std::vector< value_type > storage_;
 			atomic_array bitflag_;
