@@ -50,7 +50,7 @@ int main( int argc, char *argv[] )
 		{
 			data_type( size_t e ) :
 				expected( e ),
-				queue(),
+				queue( 0 ),
 				producer_count( 0 ),
 				consumer_count( 0 ) { }
 			const size_t expected;
@@ -63,7 +63,7 @@ int main( int argc, char *argv[] )
 		
 		auto data = make_shared< data_type >( 1e6 );
 		
-		auto producer = [data]()
+		function_type producer = [data]()
 		{
 			while ( data->producer_count++ < data->expected )
 			{
@@ -74,9 +74,13 @@ int main( int argc, char *argv[] )
 					}
 				);
 			}
+			if ( data->producer_count >= data->expected )
+			{
+				--data->producer_count;
+			}
 		};
 		
-		auto consumer = [data]()
+		function_type consumer = [data]()
 		{
 			while ( data->consumer_count < data->expected )
 			{
@@ -88,7 +92,7 @@ int main( int argc, char *argv[] )
 			}
 		};
 		
-		auto result = [=]()
+		function_type result = [=]()
 		{
 			high_resolution_clock::time_point t2 = high_resolution_clock::now();
 			
