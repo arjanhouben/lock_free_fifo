@@ -17,10 +17,10 @@ typedef function< void() > function_type;
 template < typename T >
 struct naive_queue
 {
-        naive_queue( size_t r ) :
-            lock_(),
-            data_(),
-            index_( 0 )
+        naive_queue( size_t r = 1024 ) :
+			lock_(),
+			index_( 0 ),
+            data_()
         {
             data_.reserve( r );
         }
@@ -44,9 +44,6 @@ struct naive_queue
         size_t index_;
         vector< T > data_;
 };
-
-typedef lock_free::fifo< function_type > jobqueue;
-//typedef naive_queue< function_type > jobqueue;
 
 template < typename T >
 T to( const string &str )
@@ -74,26 +71,14 @@ function_type get_result( T &&t )
     return get< 2 >( t );
 }
 
-int main( int argc, char *argv[] )
+template < typename Q >
+void test( const string &testname, size_t count, size_t threadcount )
 {
-    auto create_producer_consumer_result = []( const string &name )
+    auto create_producer_consumer_result = [=]( const string &name )
     {
-        struct data_type
-        {
-            data_type( size_t e ) :
-                expected( e ),
-                queue( e ),
-                producer_count( 0 ),
-                consumer_count( 0 ) { }
-            const size_t expected;
-            jobqueue queue;
-            atomic_size_t producer_count;
-            atomic_size_t consumer_count;
-        };
-
         high_resolution_clock::time_point t1 = high_resolution_clock::now();
 
-        auto data = make_shared< data_type >( 1e6 );
+        auto data = make_shared< Q >( count );
 
         function_type producer = [data]()
         {
@@ -130,14 +115,19 @@ int main( int argc, char *argv[] )
 
             duration< double > time_span = duration_cast< duration< double > >(t2 - t1);
 
-            cout << "expected: " << data->expected << ", actual: " << data->consumer_count << endl;
-            cout << name << " took: " << time_span.count() << " seconds" << endl;
+			if ( data->expected != data->consumer_count )
+			{
+				cout << "\texpected: " << data->expected << ", actual: " << data->consumer_count << endl;
+			}
+            cout << '\t' << name << " took: " << time_span.count() << " seconds" << endl;
         };
 
         return make_tuple( producer, consumer, result );
     };
-
-    const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
+	
+	high_resolution_clock::time_point teststart = high_resolution_clock::now();
+	
+	cout << testname << ":\n{\n";
 
     // single producer, single consumer
     {
@@ -157,7 +147,7 @@ int main( int argc, char *argv[] )
         get_producer( pcr )();
 
         vector< thread > threads;
-        size_t c = thread_count;
+        size_t c = threadcount;
         while ( c-- )
         {
             threads.push_back( thread( get_consumer( pcr ) ) );
@@ -176,7 +166,7 @@ int main( int argc, char *argv[] )
         auto pcr = create_producer_consumer_result( "multi producer, single consumer" );
 
         vector< thread > threads;
-        size_t c = thread_count;
+        size_t c = threadcount;
         while ( c-- )
         {
             threads.push_back( thread( get_producer( pcr ) ) );
@@ -197,7 +187,7 @@ int main( int argc, char *argv[] )
         auto pcr = create_producer_consumer_result( "multi producer, multi consumer" );
 
         vector< thread > threads;
-        size_t c = thread_count / 2;
+        size_t c = threadcount / 2;
         while ( c-- )
         {
             threads.push_back( thread( get_producer( pcr ) ) );
@@ -211,8 +201,32 @@ int main( int argc, char *argv[] )
 
         get_result( pcr )();
     }
+	
+	duration< double > time_span = duration_cast< duration< double > >( high_resolution_clock::now() - teststart );
+	cout << "\ttotal: " << time_span.count() << " seconds\n}" << endl;
+}
 
-//    getc(stdin);
+template < typename T >
+struct test_data
+{
+	test_data( size_t e ) :
+		expected( e ),
+		queue(),
+		producer_count( 0 ),
+		consumer_count( 0 ) { }
+	
+	const size_t expected;
+	T queue;
+	atomic_size_t producer_count;
+	atomic_size_t consumer_count;
+};
+
+int main( int argc, char *argv[] )
+{
+	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
+	
+	test< test_data< lock_free::fifo< function_type > > >( "lock free", 1e6, thread_count );
+	test< test_data< naive_queue< function_type > > >( "naive", 1e6, thread_count );
 
     return 0;
 }

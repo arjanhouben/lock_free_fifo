@@ -90,11 +90,6 @@ namespace lock_free
 	}
 
 	template < typename Source, typename Destination >
-	void ignore( Destination, Source )
-	{
-	}
-
-	template < typename Source, typename Destination >
 	void assign( Destination &dst, const Source &src )
 	{
 		dst = src;
@@ -106,36 +101,39 @@ namespace lock_free
 		std::swap( src, dst );
 	}
 
-	enum value_state
+	enum class value_state
 	{
 		uninitialized = 0,
 		ready = 1,
 		done = 2
 	};
 
-	template < typename T >
+	template < typename Value >
 	struct statefull_value
 	{
-		statefull_value( const T &t = T() ) :
-			value( t ),
-			state( uninitialized )
+		typedef Value value_type;
+		typedef statefull_value< value_type > self;
+		
+		statefull_value( const value_type &v = value_type() ) :
+			value( v ),
+			state( value_state::uninitialized )
 		{
 		}
-
-		statefull_value( const statefull_value< T > &rhs ) :
+		
+		statefull_value( const self &rhs ) :
 			value( rhs.value ),
 			state( rhs.state.load() )
 		{
 		}
 
-		statefull_value& operator = ( const statefull_value< T > &rhs )
+		statefull_value& operator = ( const self &rhs )
 		{
 			value = rhs.value;
 			state.store( rhs.state );
 			return *this;
 		}
 
-		T value;
+		value_type value;
 		std::atomic< value_state > state;
 	};
 
@@ -184,7 +182,7 @@ namespace lock_free
 				
 				storage_[ id ].value = value;
 				
-				storage_[ id ].state = ready;
+				storage_[ id ].state = value_state::ready;
 			}
 
 			/**
@@ -193,7 +191,7 @@ namespace lock_free
 			 */
 			bool pop( value_type &func )
 			{
-				return pop_generic( func, assign< value_type, value_type > );
+				return pop_generic( func, swap< value_type, value_type > );
 			}
 
 			/**
@@ -216,7 +214,16 @@ namespace lock_free
 			 */
 			void clear()
 			{
-				// todo
+				mutex_guard guard( lock_ );
+				
+				// we want an exclusive lock, so wait until we are the only user
+				while ( lock_.use_count() )
+				{
+					std::this_thread::yield();
+				}
+				
+				read_ = 0;
+				write_ = 0;
 			}
 
 			/**
@@ -232,24 +239,39 @@ namespace lock_free
 			fifo( const fifo& );
 			fifo& operator = ( const fifo& );
 
+#if _MSC_VER
 			static size_t bits_per_section()
+#else
+			static constexpr size_t bits_per_section()
+#endif
 			{
 				return sizeof( size_t ) * 8;
 			}
 
 			template < typename Assign >
-			bool pop_generic( value_type &value, Assign assign = ignore )
+			bool pop_generic( value_type &value, Assign assign )
 			{
 				shared_lock_guard lock( lock_ );
 
 				size_t m = std::min( write_, size_ );
 				for ( size_t id = read_; id < m; ++id )
 				{
-					value_state current( ready );
-					if ( storage_[ id ].state.compare_exchange_strong( current, done ) )
+					value_state current( value_state::ready );
+					if ( storage_[ id ].state.compare_exchange_strong( current, value_state::done ) )
 					{
-						assign( value, storage_[ id ].value );
+						try
+						{
+							assign( value, storage_[ id ].value );
+						}
+						catch ( ... )
+						{
+							storage_[ id ].state.store( current );
+							
+							throw;
+						}
+						
 						increase_read( id );
+						
 						return true;
 					}
 				}
@@ -257,7 +279,7 @@ namespace lock_free
 				return false;
 			}
 
-			void reset_counters( size_t id )
+			void reset_counters()
 			{
 				/// lock
 				mutex_guard guard( lock_ );
@@ -310,8 +332,8 @@ namespace lock_free
 			{
 				if ( id != read_ ) return;
 
-				value_state expected( done );
-				while ( id < size_ && storage_[ id++ ].state.compare_exchange_strong( expected, uninitialized ) )
+				value_state expected( value_state::done );
+				while ( id < size_ && storage_[ id++ ].state.compare_exchange_strong( expected, value_state::uninitialized ) )
 				{
 					++read_;
 				}
@@ -319,7 +341,9 @@ namespace lock_free
 				if ( read_ == write_ )
 				{
 					lock_.unlock_shared();
-					reset_counters( read_ );
+					
+					reset_counters();
+					
 					lock_.lock_shared();
 				}
 			}
