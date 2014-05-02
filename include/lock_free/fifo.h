@@ -124,6 +124,7 @@ namespace lock_free
 				read_( 0 ),
 				write_( 0 ),
 				size_( size ),
+				cleanup_( 0 ),
 				storage_( size ),
 				bitflag_()
 			{
@@ -212,59 +213,61 @@ namespace lock_free
 			template < typename Assign >
 			bool pop_generic( value_type &value, Assign assign = ignore )
 			{
-				shared_lock_guard lock( lock_ );
+				size_t id;
 				
-				const size_t id = read_++;
-				
-				if ( id >= write_ )
+				// mutex scope
 				{
-					try_cleanup( id );
+					shared_lock_guard lock( lock_ );
 					
-					--read_;
+					id = read_++;
 					
-					return false;
+					if ( id >= write_ )
+					{
+						--read_;
+						
+						return false;
+					}
+					
+					const size_t mask = mask_for_id( id );
+					while ( !unset_bitflag( id, mask ) )
+					{
+						lock_.unlock_shared();
+						std::this_thread::yield();
+						lock_.lock_shared();
+					}
+					
+					assign( value, storage_[ id ] );
 				}
 				
-				const size_t mask = mask_for_id( id );
-				while ( !unset_bitflag( id, mask ) )
+				size_t clean_jobs = ++cleanup_;
+				// this check is to prevent needless locking and is retested from within a lock
+				if ( clean_jobs == write_ )
 				{
-					lock_.unlock_shared();
-					std::this_thread::yield();
-					lock_.lock_shared();
+					reset_counters( clean_jobs );
 				}
-				
-				assign( value, storage_[ id ] );
-				
+			
 				return true;
 			}
 		
-			void try_cleanup( size_t id )
+			void reset_counters( size_t id )
 			{
-				if ( id == write_ && write_ )
+				/// lock
+				mutex_guard guard( lock_ );
+				
+				// check from with the mutex if another job was added since the last check
+				if ( id != write_ )
 				{
-					lock_.unlock_shared();
-					
-					while ( job_available_before( write_ ) )
-					{
-						std::this_thread::yield();
-					}
-					
-					{
-						/// lock
-						mutex_guard guard( lock_ );
-						
-						// we want an exclusive lock, so wait until we are the only user
-						while ( lock_.use_count() )
-						{
-							std::this_thread::yield();
-						}
-						
-						read_ -= write_;
-						write_ = 0;
-					}
-					
-					lock_.lock_shared();
+					return;
 				}
+				
+				// we want an exclusive lock, so wait until we are the only user
+				while ( lock_.use_count() )
+				{
+					std::this_thread::yield();
+				}
+				
+				read_ -= id;
+				write_ -= id;
 			}
 	
 			void resize_storage( size_t id )
@@ -344,7 +347,7 @@ namespace lock_free
 		
 			shared_mutex lock_;
 			
-			std::atomic_size_t read_, write_, size_;
+			std::atomic_size_t read_, write_, size_, cleanup_;
 			std::vector< value_type > storage_;
 			atomic_array bitflag_;
 	};
