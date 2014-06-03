@@ -7,7 +7,8 @@
 #include <vector>
 #include <chrono>
 
-#include "include/lock_free/fifo.h"
+#include <lock_free/fifo.h>
+#include <lock_free/multibin.h>
 
 using namespace std;
 using namespace chrono;
@@ -15,9 +16,9 @@ using namespace chrono;
 typedef function< void() > function_type;
 
 template < typename T >
-struct naive_queue
+struct mutex_queue
 {
-        naive_queue( size_t r = 1024 ) :
+        mutex_queue( size_t r = 1024 ) :
 			lock_(),
 			index_( 0 ),
             data_()
@@ -223,10 +224,13 @@ struct test_data
 
 int main( int argc, char *argv[] )
 {
+	constexpr auto test_count = 1e6;
+	
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
 	
-	test< test_data< lock_free::fifo< function_type > > >( "lock free", 1e6, thread_count );
-	test< test_data< naive_queue< function_type > > >( "naive", 1e6, thread_count );
+	test< test_data< lock_free::fifo< function_type > > >( "lock free", test_count, thread_count );
+	test< test_data< lock_free::multibin< function_type > > >( "multibin", test_count, thread_count );
+	test< test_data< mutex_queue< function_type > > >( "mutex_queue", test_count, thread_count );
 
     return 0;
 }

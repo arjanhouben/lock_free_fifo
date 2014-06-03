@@ -3,92 +3,14 @@
 #include <atomic>
 #include <memory>
 #include <vector>
-#include <mutex>
 #include <thread>
 #include <algorithm>
 
+#include <lock_free/statefull_value.h>
+#include <lock_free/shared_mutex.h>
+
 namespace lock_free
 {
-	class shared_mutex
-	{
-		public:
-
-			static const size_t locked = size_t( 1 ) << ( sizeof( size_t ) * 8 - 1 );
-
-			void lock()
-			{
-				lock_required_.fetch_or( locked );
-
-				mutex_.lock();
-			}
-
-			void unlock()
-			{
-				mutex_.unlock();
-
-				lock_required_.fetch_and( ~locked );
-			}
-
-			void lock_shared()
-			{
-				if ( ++lock_required_ & locked )
-				{
-					--lock_required_;
-					mutex_.lock();
-					mutex_.unlock();
-					++lock_required_;
-				}
-			}
-
-			void unlock_shared()
-			{
-				--lock_required_;
-			}
-
-			size_t use_count() const
-			{
-				return lock_required_ & ( ~locked );
-			}
-
-		private:
-
-			std::atomic_size_t lock_required_;
-			std::mutex mutex_;
-	};
-
-	class shared_lock_guard
-	{
-		public:
-			shared_lock_guard( shared_mutex &m ) :
-				m_( m )
-			{
-				m_.lock_shared();
-			}
-
-			~shared_lock_guard()
-			{
-				m_.unlock_shared();
-			}
-		private:
-			shared_mutex &m_;
-	};
-
-	void fill_atomic_array( std::atomic_size_t *start, std::atomic_size_t *end, size_t value )
-	{
-		while ( start != end )
-		{
-			(start++)->store( value );
-		}
-	}
-
-	void copy_atomic_array( const std::atomic_size_t *start, const std::atomic_size_t *end, std::atomic_size_t *dst )
-	{
-		while ( start != end )
-		{
-			(dst++)->store( *start++ );
-		}
-	}
-
 	template < typename Source, typename Destination >
 	void assign( Destination &dst, const Source &src )
 	{
@@ -100,42 +22,6 @@ namespace lock_free
 	{
 		std::swap( src, dst );
 	}
-
-	enum class value_state
-	{
-		uninitialized = 0,
-		ready = 1,
-		done = 2
-	};
-
-	template < typename Value >
-	struct statefull_value
-	{
-		typedef Value value_type;
-		typedef statefull_value< value_type > self;
-		
-		statefull_value( const value_type &v = value_type() ) :
-			value( v ),
-			state( value_state::uninitialized )
-		{
-		}
-		
-		statefull_value( const self &rhs ) :
-			value( rhs.value ),
-			state( rhs.state.load() )
-		{
-		}
-
-		statefull_value& operator = ( const self &rhs )
-		{
-			value = rhs.value;
-			state.store( rhs.state );
-			return *this;
-		}
-
-		value_type value;
-		std::atomic< value_state > state;
-	};
 
 	/**
 	 * This is a lock free fifo, which can be used for multi-producer, multi-consumer
@@ -149,7 +35,6 @@ namespace lock_free
 			typedef Value value_type;
 			typedef statefull_value< value_type > storage_type;
 			typedef std::lock_guard< shared_mutex > mutex_guard;
-			typedef std::unique_ptr< std::atomic_size_t[] > atomic_array;
 
 			fifo( size_t size = 1024 ) :
 				lock_(),
@@ -178,7 +63,7 @@ namespace lock_free
 					resize_storage( id );
 				}
 
-				shared_lock_guard lock( lock_ );
+				shared_mutex::shared_guard lock( lock_ );
 				
 				storage_[ id ].value = value;
 				
@@ -204,7 +89,7 @@ namespace lock_free
 				value_type tmp;
 				while ( pop( tmp ) )
 				{
-					unfinished.push_back( tmp );
+					unfinished.push_back( std::move( tmp ) );
 				}
 				return unfinished;
 			}
@@ -251,7 +136,7 @@ namespace lock_free
 			template < typename Assign >
 			bool pop_generic( value_type &value, Assign assign )
 			{
-				shared_lock_guard lock( lock_ );
+				shared_mutex::shared_guard lock( lock_ );
 
 				size_t m = std::min( write_, size_ );
 				for ( size_t id = read_; id < m; ++id )
@@ -290,7 +175,7 @@ namespace lock_free
 					std::this_thread::yield();
 				}
 
-				// check from with the mutex if another job was added since the last check
+				// check from within the mutex if another job was added since the last check
 				if ( read_ != write_ )
 				{
 					return;
