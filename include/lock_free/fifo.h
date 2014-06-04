@@ -24,8 +24,7 @@ namespace lock_free
 			{
 				uninitialized = 0,
 				ready,
-				done,
-				in_use
+				done
 			};
 
 			typedef Value value_type;
