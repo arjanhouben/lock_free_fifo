@@ -234,7 +234,7 @@ int main( int argc, char *argv[] )
 
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
 
-	test< test_data< lock_free::fifo< function_type > > >( "lock free", test_count, thread_count );
+	test< test_data< lock_free::fifo< function_type > > >( "lock_free::fifo", test_count, thread_count );
 	test< test_data< mutex_queue< function_type > > >( "mutex_queue", test_count, thread_count );
 
 	return 0;

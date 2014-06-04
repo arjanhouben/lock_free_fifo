@@ -13,3 +13,10 @@ add_executable( fifotest
     include/lock_free/fifo.h
     include/lock_free/shared_mutex.h
 )
+
+install(
+	DIRECTORY
+		include/lock_free
+	DESTINATION
+		include
+)

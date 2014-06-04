@@ -1,5 +1,9 @@
 #pragma once
 
+/*
+ * Arjan Houben - 2014
+ */
+
 #include <atomic>
 #include <mutex>
 
