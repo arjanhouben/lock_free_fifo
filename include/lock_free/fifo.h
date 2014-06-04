@@ -5,8 +5,8 @@
 #include <vector>
 #include <thread>
 #include <algorithm>
+#include <utility>
 
-#include <lock_free/statefull_value.h>
 #include <lock_free/shared_mutex.h>
 
 namespace lock_free
@@ -19,10 +19,30 @@ namespace lock_free
 	class fifo
 	{
 		public:
+		
+			enum class value_state : uint8_t
+			{
+				uninitialized = 0,
+				ready,
+				done,
+				in_use
+			};
 
 			typedef Value value_type;
-			typedef statefull_value< value_type > storage_type;
-			typedef std::lock_guard< shared_mutex > mutex_guard;
+			struct storage_type
+			{
+				value_type value;
+				std::atomic< value_state > state;
+				
+				storage_type() = default;
+				
+				storage_type( storage_type &&s ) :
+					value( s.value ),
+					state( s.state.load() )
+				{
+				}
+			};
+		
 
 			fifo( size_t size = 1024 ) :
 				lock_(),
@@ -37,7 +57,8 @@ namespace lock_free
 			 * pushes an item into the job queue, may throw if allocation fails
 			 * leaving the queue unchanged
 			 */
-			void push( const value_type &value )
+			template < typename T >
+			void push( T &&value )
 			{
 				if ( write_ == std::numeric_limits< size_t >::max() )
 				{
@@ -53,22 +74,22 @@ namespace lock_free
 
 				shared_mutex::shared_guard lock( lock_ );
 
-				storage_[ id ].value = value;
+				storage_[ id ].value = std::forward< T >( value );
 
 				storage_[ id ].state = value_state::ready;
 			}
 
 			/**
 			 * retrieves an item from the job queue.
-			 * if no item was available, func is untouched and pop returns false
+			 * if no item was available, item is untouched and pop returns false
 			 */
-			bool pop( value_type &func )
+			bool pop( value_type &item )
 			{
 				const auto swap = []( value_type &dst, value_type &src )
 				{
 					std::swap( dst, src );
 				};
-				return pop_generic( func, swap );
+				return pop_generic( item, swap );
 			}
 
 			/**
@@ -93,16 +114,13 @@ namespace lock_free
 			 */
 			void clear()
 			{
-				mutex_guard guard( lock_ );
-
-				// we want an exclusive lock, so wait until we are the only user
-				while ( lock_.use_count() )
-				{
-					std::this_thread::yield();
-				}
-
-				read_ = 0;
-				write_ = 0;
+				lock_.exclusive(
+					[&]()
+					{
+						read_ = 0;
+						write_ = 0;
+					}
+				);
 			}
 
 			/**
@@ -114,19 +132,15 @@ namespace lock_free
 			}
 
 		private:
-
+		
+#if _MSC_VER
 			fifo( const fifo & );
 			fifo &operator = ( const fifo & );
-
-#if _MSC_VER
-			static size_t bits_per_section()
 #else
-			static constexpr size_t bits_per_section()
+			fifo( const fifo & ) = delete;
+			fifo &operator = ( const fifo & ) = delete;
 #endif
-			{
-				return sizeof( size_t ) * 8;
-			}
-
+		
 			template < typename Assign >
 			bool pop_generic( value_type &value, Assign assign )
 			{
@@ -162,23 +176,19 @@ namespace lock_free
 
 			void reset_counters()
 			{
-				/// lock
-				mutex_guard guard( lock_ );
-
-				// we want an exclusive lock, so wait until we are the only user
-				while ( lock_.use_count() )
-				{
-					std::this_thread::yield();
-				}
-
-				// check from within the mutex if another job was added since the last check
-				if ( read_ != write_ )
-				{
-					return;
-				}
-
-				read_ = 0;
-				write_ = 0;
+				lock_.exclusive(
+					[&]()
+					{
+						// check from within the mutex if another job was added since the last check
+						if ( read_ != write_ )
+						{
+							return;
+						}
+						
+						read_ = 0;
+						write_ = 0;
+					}
+				);
 			}
 
 			void resize_storage( size_t id )
@@ -187,20 +197,16 @@ namespace lock_free
 				{
 					if ( id == size_ )
 					{
-						const size_t newsize = std::max< size_t >( 1, size_ * 2 );
-
-						/// lock
-						mutex_guard guard( lock_ );
-
-						// we want an exclusive lock, so wait until we are the only user
-						while ( lock_.use_count() )
-						{
-							std::this_thread::yield();
-						}
-
-						storage_.resize( newsize );
-
-						size_ = storage_.size();
+						lock_.exclusive(
+							[&]()
+							{
+								const size_t newsize = std::max< size_t >( 1, size_ * 2 );
+								
+								storage_.resize( newsize );
+								
+								size_ = storage_.size();
+							}
+						);
 					}
 					else
 					{
@@ -211,7 +217,10 @@ namespace lock_free
 
 			void increase_read( size_t id )
 			{
-				if ( id != read_ ) { return; }
+				if ( id != read_ )
+				{
+					return;
+				}
 
 				value_state expected( value_state::done );
 

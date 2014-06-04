@@ -13,6 +13,4 @@ add_executable( jobthread
     main.cpp
     include/lock_free/fifo.h
     include/lock_free/shared_mutex.h
-    include/lock_free/statefull_value.h
-    include/lock_free/multibin.h
 )

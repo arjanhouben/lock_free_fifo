@@ -8,7 +8,6 @@
 #include <chrono>
 
 #include <lock_free/fifo.h>
-#include <lock_free/multibin.h>
 
 using namespace std;
 using namespace chrono;
@@ -88,9 +87,9 @@ void test( const string &testname, size_t count, size_t threadcount )
 			{
 				data->queue.push(
 				    [data]()
-				{
-					++data->consumer_count;
-				}
+					{
+						++data->consumer_count;
+					}
 				);
 			}
 
@@ -236,7 +235,6 @@ int main( int argc, char *argv[] )
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
 
 	test< test_data< lock_free::fifo< function_type > > >( "lock free", test_count, thread_count );
-	test< test_data< lock_free::multibin< function_type > > >( "multibin", test_count, thread_count );
 	test< test_data< mutex_queue< function_type > > >( "mutex_queue", test_count, thread_count );
 
 	return 0;

@@ -45,6 +45,19 @@ namespace lock_free
 			{
 				return lock_required_ & ( ~locked );
 			}
+		
+			template < typename F >
+			void exclusive( F f )
+			{
+				std::lock_guard< shared_mutex > guard( *this );
+				
+				while ( use_count() )
+				{
+					std::this_thread::yield();
+				}
+				
+				f();
+			}
 
 			class shared_guard
 			{
