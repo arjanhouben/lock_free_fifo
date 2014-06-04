@@ -11,18 +11,6 @@
 
 namespace lock_free
 {
-	template < typename Source, typename Destination >
-	void assign( Destination &dst, const Source &src )
-	{
-		dst = src;
-	}
-
-	template < typename Source, typename Destination >
-	void swap( Destination &dst, Source &src )
-	{
-		std::swap( src, dst );
-	}
-
 	/**
 	 * This is a lock free fifo, which can be used for multi-producer, multi-consumer
 	 * type job queue
@@ -64,9 +52,9 @@ namespace lock_free
 				}
 
 				shared_mutex::shared_guard lock( lock_ );
-				
+
 				storage_[ id ].value = value;
-				
+
 				storage_[ id ].state = value_state::ready;
 			}
 
@@ -76,7 +64,11 @@ namespace lock_free
 			 */
 			bool pop( value_type &func )
 			{
-				return pop_generic( func, swap< value_type, value_type > );
+				const auto swap = []( value_type &dst, value_type &src )
+				{
+					std::swap( dst, src );
+				};
+				return pop_generic( func, swap );
 			}
 
 			/**
@@ -84,13 +76,15 @@ namespace lock_free
 			 * the container is also returned for convenience
 			 */
 			template < typename T >
-			T& pop_all( T &unfinished )
+			T &pop_all( T &unfinished )
 			{
 				value_type tmp;
+
 				while ( pop( tmp ) )
 				{
 					unfinished.push_back( std::move( tmp ) );
 				}
+
 				return unfinished;
 			}
 
@@ -100,13 +94,13 @@ namespace lock_free
 			void clear()
 			{
 				mutex_guard guard( lock_ );
-				
+
 				// we want an exclusive lock, so wait until we are the only user
 				while ( lock_.use_count() )
 				{
 					std::this_thread::yield();
 				}
-				
+
 				read_ = 0;
 				write_ = 0;
 			}
@@ -121,8 +115,8 @@ namespace lock_free
 
 		private:
 
-			fifo( const fifo& );
-			fifo& operator = ( const fifo& );
+			fifo( const fifo & );
+			fifo &operator = ( const fifo & );
 
 #if _MSC_VER
 			static size_t bits_per_section()
@@ -139,9 +133,11 @@ namespace lock_free
 				shared_mutex::shared_guard lock( lock_ );
 
 				size_t m = std::min( write_, size_ );
+
 				for ( size_t id = read_; id < m; ++id )
 				{
 					value_state current( value_state::ready );
+
 					if ( storage_[ id ].state.compare_exchange_strong( current, value_state::done ) )
 					{
 						try
@@ -151,12 +147,12 @@ namespace lock_free
 						catch ( ... )
 						{
 							storage_[ id ].state.store( current );
-							
+
 							throw;
 						}
-						
+
 						increase_read( id );
-						
+
 						return true;
 					}
 				}
@@ -215,9 +211,10 @@ namespace lock_free
 
 			void increase_read( size_t id )
 			{
-				if ( id != read_ ) return;
+				if ( id != read_ ) { return; }
 
 				value_state expected( value_state::done );
+
 				while ( id < size_ && storage_[ id++ ].state.compare_exchange_strong( expected, value_state::uninitialized ) )
 				{
 					++read_;
@@ -226,13 +223,13 @@ namespace lock_free
 				if ( read_ == write_ )
 				{
 					lock_.unlock_shared();
-					
+
 					reset_counters();
-					
+
 					lock_.lock_shared();
 				}
 			}
-		
+
 			shared_mutex lock_;
 			std::atomic_size_t read_, write_, size_;
 			std::vector< storage_type > storage_;
