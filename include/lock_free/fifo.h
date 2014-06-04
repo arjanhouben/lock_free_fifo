@@ -65,17 +65,27 @@ namespace lock_free
 				}
 
 				const size_t id = write_++;
-
-				if ( id >= size_ )
+				
+				try
 				{
-					resize_storage( id );
+					if ( id >= size_ )
+					{
+						resize_storage( id );
+					}
+
+					shared_mutex::shared_guard lock( lock_ );
+
+					storage_[ id ].value = std::forward< T >( value );
+					
+					storage_[ id ].state = value_state::ready;
 				}
-
-				shared_mutex::shared_guard lock( lock_ );
-
-				storage_[ id ].value = std::forward< T >( value );
-
-				storage_[ id ].state = value_state::ready;
+				catch( ... )
+				{
+					// if some exception occured, make sure we don't use this id
+					storage_[ id ].state = value_state::done;
+					
+					throw;
+				}
 			}
 
 			/**
