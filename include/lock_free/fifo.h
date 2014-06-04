@@ -40,7 +40,7 @@ namespace lock_free
 				storage_type() = default;
 				
 				storage_type( storage_type &&s ) :
-					value( s.value ),
+					value( std::move( s.value ) ),
 					state( s.state.load() )
 				{
 				}
@@ -61,7 +61,7 @@ namespace lock_free
 			 * leaving the queue unchanged
 			 */
 			template < typename T >
-			void push( T &&value )
+			void push_back( T &&value )
 			{
 				if ( write_ == std::numeric_limits< size_t >::max() )
 				{
@@ -91,20 +91,52 @@ namespace lock_free
 					throw;
 				}
 			}
-
+		
+			/**
+			 * for conformance with stl containers
+			 */
+			void pop_back()
+			{
+				value_type result;
+				pop( result );
+			}
+			
 			/**
 			 * retrieves an item from the job queue.
 			 * if no item was available, item is untouched and pop returns false
 			 */
-			bool pop( value_type &item )
+			bool pop( value_type &value )
 			{
-				const auto swap = []( value_type &dst, value_type &src )
+				shared_mutex::shared_guard lock( lock_ );
+				
+				size_t m = std::min( write_, size_ );
+				
+				for ( size_t id = read_; id < m; ++id )
 				{
-					std::swap( dst, src );
-				};
-				return pop_generic( item, swap );
+					value_state current( value_state::ready );
+					
+					if ( storage_[ id ].state.compare_exchange_strong( current, value_state::done ) )
+					{
+						try
+						{
+							std::swap( value, storage_[ id ].value );
+						}
+						catch ( ... )
+						{
+							storage_[ id ].state.store( current );
+							
+							throw;
+						}
+						
+						increase_read( id );
+						
+						return true;
+					}
+				}
+				
+				return false;
 			}
-
+			
 			/**
 			 * clears the job queue, storing all pending jobs in the supplied container.
 			 * the container is also returned for convenience
@@ -112,9 +144,7 @@ namespace lock_free
 			template < typename T >
 			T &pop_all( T &unfinished )
 			{
-				value_type tmp;
-
-				while ( pop( tmp ) )
+				for ( value_type tmp; pop( tmp ); )
 				{
 					unfinished.push_back( std::move( tmp ) );
 				}
@@ -154,38 +184,6 @@ namespace lock_free
 			fifo &operator = ( const fifo & ) = delete;
 #endif
 		
-			template < typename Assign >
-			bool pop_generic( value_type &value, Assign assign )
-			{
-				shared_mutex::shared_guard lock( lock_ );
-
-				size_t m = std::min( write_, size_ );
-
-				for ( size_t id = read_; id < m; ++id )
-				{
-					value_state current( value_state::ready );
-
-					if ( storage_[ id ].state.compare_exchange_strong( current, value_state::done ) )
-					{
-						try
-						{
-							assign( value, storage_[ id ].value );
-						}
-						catch ( ... )
-						{
-							storage_[ id ].state.store( current );
-
-							throw;
-						}
-
-						increase_read( id );
-
-						return true;
-					}
-				}
-
-				return false;
-			}
 
 			void reset_counters()
 			{

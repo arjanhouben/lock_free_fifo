@@ -9,6 +9,8 @@
 
 #include <lock_free/fifo.h>
 
+#include <boost/lockfree/queue.hpp>
+
 using namespace std;
 using namespace chrono;
 
@@ -25,7 +27,7 @@ struct mutex_queue
 		data_.reserve( r );
 	}
 
-	void push( const T &t )
+	void push_back( const T &t )
 	{
 		lock_guard< mutex > guard( lock_ );
 		data_.push_back( t );
@@ -85,7 +87,7 @@ void test( const string &testname, size_t count, size_t threadcount )
 		{
 			while ( data->producer_count++ < data->expected )
 			{
-				data->queue.push(
+				data->queue.push_back(
 				    [data]()
 					{
 						++data->consumer_count;
@@ -217,11 +219,11 @@ template < typename T >
 struct test_data
 {
 	test_data( size_t e ) :
-		expected( e ),
-		queue(),
-		producer_count( 0 ),
-		consumer_count( 0 ) { }
-
+	expected( e ),
+	queue( e ),
+	producer_count( 0 ),
+	consumer_count( 0 ) { }
+	
 	const size_t expected;
 	T queue;
 	atomic_size_t producer_count;
@@ -233,7 +235,7 @@ int main( int argc, char *argv[] )
 	constexpr auto test_count = 1e6;
 
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
-
+	
 	test< test_data< lock_free::fifo< function_type > > >( "lock_free::fifo", test_count, thread_count );
 	test< test_data< mutex_queue< function_type > > >( "mutex_queue", test_count, thread_count );
 
