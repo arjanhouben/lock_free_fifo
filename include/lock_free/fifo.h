@@ -109,7 +109,7 @@ namespace lock_free
 			{
 				shared_mutex::shared_guard lock( lock_ );
 				
-				size_t m = std::min( write_, size_ );
+				const size_t m = std::min( write_, size_ );
 				
 				for ( size_t id = read_; id < m; ++id )
 				{

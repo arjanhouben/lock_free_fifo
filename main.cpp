@@ -9,8 +9,6 @@
 
 #include <lock_free/fifo.h>
 
-#include <boost/lockfree/queue.hpp>
-
 using namespace std;
 using namespace chrono;
 
@@ -220,7 +218,7 @@ struct test_data
 {
 	test_data( size_t e ) :
 	expected( e ),
-	queue( e ),
+	queue(),
 	producer_count( 0 ),
 	consumer_count( 0 ) { }
 	
