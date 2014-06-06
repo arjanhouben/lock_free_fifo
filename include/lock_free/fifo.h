@@ -109,9 +109,7 @@ namespace lock_free
 			{
 				shared_mutex::shared_guard lock( lock_ );
 				
-				const size_t m = std::min( write_, size_ );
-				
-				for ( size_t id = read_; id < m; ++id )
+				for ( size_t id = read_, max = std::min( write_, size_ ); id < max; ++id )
 				{
 					value_state current( value_state::ready );
 					
@@ -184,7 +182,6 @@ namespace lock_free
 			fifo &operator = ( const fifo & ) = delete;
 #endif
 		
-
 			void reset_counters()
 			{
 				lock_.exclusive(
