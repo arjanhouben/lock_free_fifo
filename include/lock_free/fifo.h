@@ -126,7 +126,15 @@ namespace lock_free
 							throw;
 						}
 						
-						increase_read( id );
+						if ( id == read_ )
+						{
+							increase_read( id );
+						}
+						else
+						{
+							// give thread with oldest job time to catchup
+							std::this_thread::yield();
+						}
 						
 						return true;
 					}
@@ -225,11 +233,6 @@ namespace lock_free
 
 			void increase_read( size_t id )
 			{
-				if ( id != read_ )
-				{
-					return;
-				}
-
 				value_state expected( value_state::done );
 
 				while ( id < size_ && storage_[ id++ ].state.compare_exchange_strong( expected, value_state::uninitialized ) )
