@@ -20,9 +20,9 @@ struct mutex_queue
 	mutex_queue( size_t r = 1024 ) :
 		lock_(),
 		index_( 0 ),
-		data_()
+		data_( r )
 	{
-		data_.reserve( r );
+		data_.clear();
 	}
 
 	void push_back( const T &t )

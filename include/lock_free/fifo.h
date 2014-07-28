@@ -95,7 +95,7 @@ namespace lock_free
 			/**
 			 * for conformance with stl containers
 			 */
-			void pop_back()
+			inline void pop_back()
 			{
 				value_type result;
 				pop( result );
