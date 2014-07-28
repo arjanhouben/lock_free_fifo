@@ -9,10 +9,33 @@
 
 #include <lock_free/fifo.h>
 
+#include <boost/asio/io_service.hpp>
+
+
 using namespace std;
 using namespace chrono;
+using namespace boost::asio;
 
 typedef function< void() >function_type;
+
+template < typename T >
+struct boostasio
+{
+	boostasio( size_t r = 1024 ) {}
+	
+	void push_back( T t )
+	{
+		service_.post( t );
+	}
+	
+	bool pop( T &t )
+	{
+		t = [](){};
+		return service_.run_one();
+	}
+	
+	io_service service_;
+};
 
 template < typename T >
 struct mutex_queue
@@ -234,6 +257,7 @@ int main( int argc, char *argv[] )
 
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
 	
+	test< test_data< boostasio< function_type > > >( "boostasio", test_count, thread_count );
 	test< test_data< lock_free::fifo< function_type > > >( "lock_free::fifo", test_count, thread_count );
 	test< test_data< mutex_queue< function_type > > >( "mutex_queue", test_count, thread_count );
 
