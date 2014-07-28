@@ -17,9 +17,9 @@ namespace lock_free
 
 			void lock()
 			{
-				if ( lock_required_.fetch_or( locked ) & locked )
+				while ( lock_required_.fetch_or( locked ) & locked )
 				{
-					throw std::logic_error( "exclusive lock already taken!" );
+                    std::this_thread::yield();
 				}
 
 				wait_single_user();
