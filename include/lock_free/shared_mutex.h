@@ -17,15 +17,16 @@ namespace lock_free
 
 			void lock()
 			{
-				lock_required_.fetch_or( locked );
+				if ( lock_required_.fetch_or( locked ) & locked )
+				{
+					throw std::logic_error( "exclusive lock already taken!" );
+				}
 
-				mutex_.lock();
+				wait_single_user();
 			}
 
 			void unlock()
 			{
-				mutex_.unlock();
-
 				lock_required_.fetch_and( ~locked );
 			}
 
@@ -34,20 +35,26 @@ namespace lock_free
 				if ( ++lock_required_ & locked )
 				{
 					--lock_required_;
-					mutex_.lock();
-					mutex_.unlock();
+					
+					wait_for_non_exclusive();
+					
 					++lock_required_;
 				}
 			}
 
-			void unlock_shared()
+			inline void unlock_shared()
 			{
 				--lock_required_;
 			}
-
-			size_t use_count() const
+		
+			inline size_t use_count() const
 			{
 				return lock_required_ & ( ~locked );
+			}
+			
+			inline bool exclusive_lock() const
+			{
+				return lock_required_ & locked;
 			}
 		
 			template < typename F >
@@ -55,10 +62,7 @@ namespace lock_free
 			{
 				std::lock_guard< shared_mutex > guard( *this );
 				
-				while ( use_count() )
-				{
-					std::this_thread::yield();
-				}
+				wait_single_user();
 				
 				f();
 			}
@@ -81,8 +85,23 @@ namespace lock_free
 			};
 
 		private:
+		
+			inline void wait_single_user() const
+			{
+				while ( use_count() )
+				{
+					std::this_thread::yield();
+				}
+			}
+		
+			inline void wait_for_non_exclusive() const
+			{
+				while ( lock_required_ & locked )
+				{
+					std::this_thread::yield();
+				}
+			}
 
 			std::atomic_size_t lock_required_;
-			std::mutex mutex_;
 	};
 }
