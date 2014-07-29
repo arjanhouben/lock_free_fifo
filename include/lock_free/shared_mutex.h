@@ -5,7 +5,6 @@
  */
 
 #include <atomic>
-#include <mutex>
 
 namespace lock_free
 {

@@ -91,15 +91,6 @@ namespace lock_free
 					throw;
 				}
 			}
-		
-			/**
-			 * for conformance with stl containers
-			 */
-			inline void pop_back()
-			{
-				value_type result;
-				pop( result );
-			}
 			
 			/**
 			 * retrieves an item from the job queue.
