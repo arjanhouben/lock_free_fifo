@@ -112,7 +112,10 @@ namespace lock_free
 						}
 						catch ( ... )
 						{
-							storage_[ id ].state.store( current );
+							if ( id == read_ )
+							{
+								increase_read( id );
+							}
 							
 							throw;
 						}

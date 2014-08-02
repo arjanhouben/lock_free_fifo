@@ -82,8 +82,6 @@ namespace lock_free
 				private:
 					shared_mutex &m_;
 			};
-
-		private:
 		
 			inline void wait_single_user() const
 			{
@@ -100,6 +98,8 @@ namespace lock_free
 					std::this_thread::yield();
 				}
 			}
+		
+	private:
 
 			std::atomic_size_t lock_required_;
 	};
