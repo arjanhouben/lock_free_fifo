@@ -12,13 +12,13 @@ namespace lock_free
 	{
 		public:
 
-			static constexpr size_t locked = size_t( 1 ) << ( sizeof( size_t ) * 8 - 1 );
+			static const size_t locked = size_t( 1 ) << ( sizeof( size_t ) * 8 - 1 );
 
 			void lock()
 			{
 				while ( lock_required_.fetch_or( locked ) & locked )
 				{
-                    std::this_thread::yield();
+					std::this_thread::yield();
 				}
 
 				wait_single_user();
@@ -34,9 +34,9 @@ namespace lock_free
 				if ( ++lock_required_ & locked )
 				{
 					--lock_required_;
-					
+
 					wait_for_non_exclusive();
-					
+
 					++lock_required_;
 				}
 			}
@@ -45,24 +45,24 @@ namespace lock_free
 			{
 				--lock_required_;
 			}
-		
+
 			inline size_t use_count() const
 			{
 				return lock_required_ & ( ~locked );
 			}
-			
+
 			inline bool exclusive_lock() const
 			{
-				return lock_required_ & locked;
+				return ( lock_required_ & locked ) != 0;
 			}
-		
+
 			template < typename F >
 			void exclusive( F f )
 			{
 				std::lock_guard< shared_mutex > guard( *this );
-				
+
 				wait_single_user();
-				
+
 				f();
 			}
 
@@ -80,9 +80,10 @@ namespace lock_free
 						m_.unlock_shared();
 					}
 				private:
+					shared_guard& operator = ( const shared_guard& );
 					shared_mutex &m_;
 			};
-		
+
 			inline void wait_single_user() const
 			{
 				while ( use_count() )
@@ -90,7 +91,7 @@ namespace lock_free
 					std::this_thread::yield();
 				}
 			}
-		
+
 			inline void wait_for_non_exclusive() const
 			{
 				while ( lock_required_ & locked )
@@ -98,7 +99,7 @@ namespace lock_free
 					std::this_thread::yield();
 				}
 			}
-		
+
 	private:
 
 			std::atomic_size_t lock_required_;

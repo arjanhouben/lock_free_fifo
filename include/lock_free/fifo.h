@@ -23,7 +23,7 @@ namespace lock_free
 	class fifo
 	{
 		public:
-		
+
 			enum class value_state : uint8_t
 			{
 				uninitialized = 0,
@@ -36,16 +36,25 @@ namespace lock_free
 			{
 				value_type value;
 				std::atomic< value_state > state;
-				
-				storage_type() = default;
-				
+
+				storage_type() :
+					value(),
+					state( value_state::uninitialized ) {}
+
 				storage_type( storage_type &&s ) :
 					value( std::move( s.value ) ),
 					state( s.state.load() )
 				{
 				}
+
+				storage_type& operator = ( const storage_type &rhs )
+				{
+					value = rhs.value;
+					state.store( rhs.state.load() );
+					return *this;
+				}
 			};
-		
+
 
 			fifo( size_t size = 1024 ) :
 				lock_(),
@@ -69,7 +78,7 @@ namespace lock_free
 				}
 
 				const size_t id = write_++;
-				
+
 				try
 				{
 					if ( id >= size_ )
@@ -80,18 +89,18 @@ namespace lock_free
 					shared_mutex::shared_guard lock( lock_ );
 
 					storage_[ id ].value = std::forward< T >( value );
-					
+
 					storage_[ id ].state = value_state::ready;
 				}
 				catch( ... )
 				{
 					// if some exception occured, make sure we don't use this id
 					storage_[ id ].state = value_state::done;
-					
+
 					throw;
 				}
 			}
-			
+
 			/**
 			 * retrieves an item from the job queue.
 			 * if no item was available, item is untouched and pop returns false
@@ -99,11 +108,11 @@ namespace lock_free
 			bool pop( value_type &value )
 			{
 				shared_mutex::shared_guard lock( lock_ );
-				
+
 				for ( size_t id = read_, max = std::min( write_, size_ ); id < max; ++id )
 				{
 					value_state current( value_state::ready );
-					
+
 					if ( storage_[ id ].state.compare_exchange_strong( current, value_state::done ) )
 					{
 						try
@@ -116,10 +125,10 @@ namespace lock_free
 							{
 								increase_read( id );
 							}
-							
+
 							throw;
 						}
-						
+
 						if ( id == read_ )
 						{
 							increase_read( id );
@@ -129,14 +138,14 @@ namespace lock_free
 							// give thread with oldest job time to catchup
 							std::this_thread::yield();
 						}
-						
+
 						return true;
 					}
 				}
-				
+
 				return false;
 			}
-			
+
 			/**
 			 * clears the job queue, storing all pending jobs in the supplied container.
 			 * the container is also returned for convenience
@@ -175,7 +184,7 @@ namespace lock_free
 			}
 
 		private:
-		
+
 #if _MSC_VER
 			fifo( const fifo & );
 			fifo &operator = ( const fifo & );
@@ -183,7 +192,7 @@ namespace lock_free
 			fifo( const fifo & ) = delete;
 			fifo &operator = ( const fifo & ) = delete;
 #endif
-		
+
 			void reset_counters()
 			{
 				lock_.exclusive(
@@ -194,7 +203,7 @@ namespace lock_free
 						{
 							return;
 						}
-						
+
 						read_ = 0;
 						write_ = 0;
 					}
@@ -211,9 +220,9 @@ namespace lock_free
 							[&]()
 							{
 								const size_t newsize = std::max< size_t >( 1, size_ * 2 );
-								
+
 								storage_.resize( newsize );
-								
+
 								size_ = storage_.size();
 							}
 						);

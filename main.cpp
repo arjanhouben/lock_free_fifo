@@ -6,6 +6,7 @@
 #include <atomic>
 #include <vector>
 #include <chrono>
+#include <mutex>
 
 #include <lock_free/fifo.h>
 #include <lock_free/shared_mutex.h>
@@ -25,12 +26,12 @@ struct boostlockfree
 {
 	boostlockfree( size_t r = 1024 ) :
 		jobs_( r ) {}
-	
+
 	void push_back( T t )
 	{
 		jobs_.push( new T( t ) );
 	}
-	
+
 	bool pop( T &t )
 	{
 		T *tmp = nullptr;
@@ -42,68 +43,27 @@ struct boostlockfree
 		}
 		return false;
 	}
-	
+
 	boost::lockfree::queue< T* > jobs_;
 };
 
 template < typename T >
 struct boostasio
 {
-	boostasio( size_t r = 1024 ) {}
-	
+	boostasio( size_t = 1024 ) {}
+
 	void push_back( T t )
 	{
 		service_.post( t );
 	}
-	
+
 	bool pop( T &t )
 	{
 		t = [](){};
-		return service_.run_one();
+		return service_.run_one() > 0;
 	}
-	
-	io_service service_;
-};
 
-template < typename T >
-struct spinlock
-{
-	spinlock( size_t r = 1024 ) :
-	lock_(),
-	reader_( 0 ),
-	data_( r )
-	{
-		data_.clear();
-	}
-	
-	void push_back( const T &t )
-	{
-		lock_.exclusive( [&]()
-						{
-							data_.push_back( t );
-						}
-						);
-	}
-	
-	bool pop( T &t )
-	{
-		bool result = false;
-		lock_.exclusive( [&]()
-						{
-							if ( reader_ < data_.size() )
-							{
-								result = true;
-								t = data_[ reader_++ ];
-							}
-						}
-						);
-		
-		return result;
-	}
-	
-	lock_free::shared_mutex lock_;
-	size_t reader_;
-	vector< T > data_;
+	io_service service_;
 };
 
 template < typename T >
@@ -178,7 +138,7 @@ void test( const string &testname, size_t count, size_t threadcount )
 			while ( data->producer_count++ < data->expected )
 			{
 				data->queue.push_back(
-				    [data]()
+					[data]()
 					{
 						++data->consumer_count;
 					}
@@ -313,59 +273,20 @@ struct test_data
 	queue(),
 	producer_count( 0 ),
 	consumer_count( 0 ) { }
-	
+
 	const size_t expected;
 	T queue;
 	atomic_size_t producer_count;
 	atomic_size_t consumer_count;
 };
 
-atomic_size_t cc, dc;
-
-struct TEST
-{
-	function_type f;
-	
-	TEST()
-	{
-		++cc;
-	}
-	
-	TEST( TEST &&t ) :
-		f( move( t.f ) )
-	{
-		if ( f ) f();
-		++cc;
-	}
-	
-	TEST( function_type ff ) : f( ff ) {++cc;}
-	
-	~TEST()
-	{
-		++dc;
-	}
-	
-	void operator()()
-	{
-		f();
-	}
-	
-	TEST& operator = ( TEST &&rhs )
-	{
-		swap( f, rhs.f );
-		if ( f ) f();
-		return *this;
-	}
-};
-
 int main( int argc, char *argv[] )
-{	
-	constexpr auto test_count = 1e6;
+{
+	const auto test_count = 1e6;
 
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
-	
+
 	test< test_data< boostlockfree< function_type > > >( "boostlockfree", test_count, thread_count );
-	test< test_data< spinlock< function_type > > >( "spinlock", test_count, thread_count );
 	test< test_data< boostasio< function_type > > >( "boostasio", test_count, thread_count );
 	test< test_data< lock_free::fifo< function_type > > >( "lock_free::fifo", test_count, thread_count );
 	test< test_data< mutex_queue< function_type > > >( "mutex_queue", test_count, thread_count );
