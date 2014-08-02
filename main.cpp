@@ -27,24 +27,17 @@ struct boostlockfree
 	boostlockfree( size_t r = 1024 ) :
 		jobs_( r ) {}
 
-	void push_back( T t )
+	inline void push_back( T t )
 	{
-		jobs_.push( new T( t ) );
+		jobs_.push( t );
 	}
 
-	bool pop( T &t )
+	inline bool pop( T &t )
 	{
-		T *tmp = nullptr;
-		if ( jobs_.pop( tmp ) )
-		{
-			t = *tmp;
-			delete tmp;
-			return true;
-		}
-		return false;
+		return jobs_.pop( t );
 	}
 
-	boost::lockfree::queue< T* > jobs_;
+	boost::lockfree::queue< T > jobs_;
 };
 
 template < typename T >
@@ -52,14 +45,15 @@ struct boostasio
 {
 	boostasio( size_t = 1024 ) {}
 
-	void push_back( T t )
+	inline void push_back( T t )
 	{
-		service_.post( t );
+		service_.post( *t );
 	}
 
-	bool pop( T &t )
+	inline bool pop( T &t )
 	{
-		t = [](){};
+		static function_type tmp = [](){};
+		t = &tmp;
 		return service_.run_one() > 0;
 	}
 
@@ -77,13 +71,13 @@ struct mutex_queue
 		data_.clear();
 	}
 
-	void push_back( const T &t )
+	inline void push_back( const T &t )
 	{
 		lock_guard< mutex > guard( lock_ );
 		data_.push_back( t );
 	}
 
-	bool pop( T &t )
+	inline bool pop( T &t )
 	{
 		lock_guard< mutex > guard( lock_ );
 
@@ -132,17 +126,19 @@ void test( const string &testname, size_t count, size_t threadcount )
 		high_resolution_clock::time_point t1 = high_resolution_clock::now();
 
 		auto data = make_shared< Q >( count );
-
-		function_type producer = [data]()
+		
+		auto tmp = new function_type(
+			[data]()
+			{
+				++data->consumer_count;
+			}
+		);
+		
+		function_type producer = [data,tmp]()
 		{
 			while ( data->producer_count++ < data->expected )
 			{
-				data->queue.push_back(
-					[data]()
-					{
-						++data->consumer_count;
-					}
-				);
+				data->queue.push_back( tmp );
 			}
 
 			if ( data->producer_count >= data->expected )
@@ -155,11 +151,11 @@ void test( const string &testname, size_t count, size_t threadcount )
 		{
 			while ( data->consumer_count < data->expected )
 			{
-				function_type func;
+				function_type *func;
 
 				while ( data->queue.pop( func ) )
 				{
-					func();
+					(*func)();
 				}
 			}
 		};
@@ -176,6 +172,8 @@ void test( const string &testname, size_t count, size_t threadcount )
 			}
 
 			cout << '\t' << name << " took: " << time_span.count() << " seconds" << endl;
+			
+			delete tmp;
 		};
 
 		return make_tuple( producer, consumer, result );
@@ -286,10 +284,10 @@ int main( int argc, char *argv[] )
 
 	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
 
-	test< test_data< boostlockfree< function_type > > >( "boostlockfree", test_count, thread_count );
-	test< test_data< boostasio< function_type > > >( "boostasio", test_count, thread_count );
-	test< test_data< lock_free::fifo< function_type > > >( "lock_free::fifo", test_count, thread_count );
-	test< test_data< mutex_queue< function_type > > >( "mutex_queue", test_count, thread_count );
+	test< test_data< boostlockfree< function_type* > > >( "boostlockfree", test_count, thread_count );
+	test< test_data< boostasio< function_type* > > >( "boostasio", test_count, thread_count );
+	test< test_data< lock_free::fifo< function_type* > > >( "lock_free::fifo", test_count, thread_count );
+	test< test_data< mutex_queue< function_type* > > >( "mutex_queue", test_count, thread_count );
 
 	return 0;
 }
