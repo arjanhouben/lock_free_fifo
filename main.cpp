@@ -7,6 +7,7 @@
 #include <vector>
 #include <chrono>
 #include <mutex>
+#include <map>
 
 #include <lock_free/fifo.h>
 #include <lock_free/shared_mutex.h>
@@ -92,31 +93,12 @@ struct mutex_queue
 	vector< T > data_;
 };
 
-template < typename T >
-T to( const string &str )
+enum
 {
-	T result;
-	stringstream( str ) >> result;
-	return result;
-}
-
-template < typename  T >
-function_type get_producer( T &&t )
-{
-	return get< 0 >( t );
-}
-
-template < typename  T >
-function_type get_consumer( T &&t )
-{
-	return get< 1 >( t );
-}
-
-template < typename  T >
-function_type get_result( T &&t )
-{
-	return get< 2 >( t );
-}
+	Producer = 0,
+	Consumer = 1,
+	Result = 2
+};
 
 template < typename Q >
 void test( const string &testname, size_t count, size_t threadcount )
@@ -187,25 +169,25 @@ void test( const string &testname, size_t count, size_t threadcount )
 	{
 		auto pcr = create_producer_consumer_result( "single producer, single consumer" );
 
-		get_producer( pcr )();
+		get< Producer >( pcr )();
 
-		get_consumer( pcr )();
+		get< Consumer >( pcr )();
 
-		get_result( pcr )();
+		get< Result >( pcr )();
 	}
 
 	// single producer, multi consumer
 	{
 		auto pcr = create_producer_consumer_result( "single producer, multi consumer" );
 
-		get_producer( pcr )();
+		get< Producer >( pcr )();
 
 		vector< thread > threads;
 		size_t c = threadcount;
 
 		while ( c-- )
 		{
-			threads.push_back( thread( get_consumer( pcr ) ) );
+			threads.push_back( thread( get< Consumer >( pcr ) ) );
 		}
 
 		for ( auto &t : threads )
@@ -213,7 +195,7 @@ void test( const string &testname, size_t count, size_t threadcount )
 			t.join();
 		}
 
-		get_result( pcr )();
+		get< Result >( pcr )();
 	}
 
 	// multi producer, single consumer
@@ -225,7 +207,7 @@ void test( const string &testname, size_t count, size_t threadcount )
 
 		while ( c-- )
 		{
-			threads.push_back( thread( get_producer( pcr ) ) );
+			threads.push_back( thread( get< Producer >( pcr ) ) );
 		}
 
 		for ( auto &t : threads )
@@ -233,9 +215,9 @@ void test( const string &testname, size_t count, size_t threadcount )
 			t.join();
 		}
 
-		get_consumer( pcr )();
+		get< Consumer >( pcr )();
 
-		get_result( pcr )();
+		get< Result >( pcr )();
 	}
 
 	// multi producer, multi consumer
@@ -247,8 +229,8 @@ void test( const string &testname, size_t count, size_t threadcount )
 
 		while ( c-- )
 		{
-			threads.push_back( thread( get_producer( pcr ) ) );
-			threads.push_back( thread( get_consumer( pcr ) ) );
+			threads.push_back( thread( get< Producer >( pcr ) ) );
+			threads.push_back( thread( get< Consumer >( pcr ) ) );
 		}
 
 		for ( auto &t : threads )
@@ -256,7 +238,7 @@ void test( const string &testname, size_t count, size_t threadcount )
 			t.join();
 		}
 
-		get_result( pcr )();
+		get< Result >( pcr )();
 	}
 
 	duration< double > time_span = duration_cast< duration< double > >( high_resolution_clock::now() - teststart );
@@ -282,12 +264,47 @@ int main( int argc, char *argv[] )
 {
 	const auto test_count = 1e6;
 
-	const auto thread_count = argc > 1 ? to< size_t >( argv[ 1 ] ) : 16;
+	const auto thread_count = 16;
 
-	test< test_data< boostlockfree< function_type* > > >( "boostlockfree", test_count, thread_count );
-	test< test_data< boostasio< function_type* > > >( "boostasio", test_count, thread_count );
-	test< test_data< lock_free::fifo< function_type* > > >( "lock_free::fifo", test_count, thread_count );
-	test< test_data< mutex_queue< function_type* > > >( "mutex_queue", test_count, thread_count );
+	map< string, function_type > tests
+	{
+		{
+			"0",
+			[=]()
+			{
+				test< test_data< boostlockfree< function_type* > > >( "boostlockfree", test_count, thread_count );
+			}
+		},
+		{
+			"1",
+			[=]()
+			{
+				test< test_data< boostasio< function_type* > > >( "boostasio", test_count, thread_count );
+			},
+		},
+		{
+			"2",
+			[=]()
+			{
+				test< test_data< lock_free::fifo< function_type* > > >( "lock_free::fifo", test_count, thread_count );
+			},
+		},
+		{
+			"3",
+			[=]()
+			{
+				test< test_data< mutex_queue< function_type* > > >( "mutex_queue", test_count, thread_count );
+			}
+		}
+	};
+	
+	for ( auto c = 1; c < argc; ++c )
+	{
+		if ( auto test = tests[ argv[ c ] ] )
+		{
+			test();
+		}
+	}
 
 	return 0;
 }
