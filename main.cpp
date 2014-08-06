@@ -15,6 +15,7 @@
 #include <boost/asio/io_service.hpp>
 #include <boost/lockfree/queue.hpp>
 
+#include "tbb/concurrent_queue.h"
 
 using namespace std;
 using namespace chrono;
@@ -26,19 +27,38 @@ template < typename T >
 struct boostlockfree
 {
 	boostlockfree( size_t r = 1024 ) :
-		jobs_( r ) {}
-
+	jobs_( r ) {}
+	
 	inline void push_back( T t )
 	{
 		jobs_.push( t );
 	}
-
+	
 	inline bool pop( T &t )
 	{
 		return jobs_.pop( t );
 	}
-
+	
 	boost::lockfree::queue< T > jobs_;
+};
+
+template < typename T >
+struct inteltbb
+{
+	inteltbb( size_t = 1024 ) :
+	jobs_() {}
+	
+	inline void push_back( T t )
+	{
+		jobs_.push( t );
+	}
+	
+	inline bool pop( T &t )
+	{
+		return jobs_.try_pop( t );
+	}
+	
+	tbb::concurrent_queue< T > jobs_;
 };
 
 template < typename T >
@@ -295,14 +315,31 @@ int main( int argc, char *argv[] )
 			{
 				test< test_data< mutex_queue< function_type* > > >( "mutex_queue", test_count, thread_count );
 			}
+		},
+		{
+			"4",
+			[=]()
+			{
+				test< test_data< inteltbb< function_type* > > >( "inteltbb", test_count, thread_count );
+			}
 		}
 	};
 	
-	for ( auto c = 1; c < argc; ++c )
+	if ( argc == 1 )
 	{
-		if ( auto test = tests[ argv[ c ] ] )
+		for( auto &test : tests )
 		{
-			test();
+			test.second();
+		}
+	}
+	else
+	{
+		for ( auto c = 1; c < argc; ++c )
+		{
+			if ( auto test = tests[ argv[ c ] ] )
+			{
+				test();
+			}
 		}
 	}
 

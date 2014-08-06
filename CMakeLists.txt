@@ -11,6 +11,11 @@ find_package( Boost COMPONENTS system )
 include_directories(
 	include
 	${Boost_INCLUDE_DIR}
+	/Users/arjan/Downloads/tbb42_20140601oss/include/
+)
+
+link_directories(
+	/Users/arjan/Downloads/tbb42_20140601oss/lib/
 )
 
 add_executable( fifotest
@@ -22,6 +27,7 @@ add_executable( fifotest
 target_link_libraries(
 	fifotest
 	${Boost_SYSTEM_LIBRARY}
+	tbb
 )
 
 install(
