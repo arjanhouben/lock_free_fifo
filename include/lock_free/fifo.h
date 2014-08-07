@@ -94,8 +94,13 @@ namespace lock_free
 				}
 				catch( ... )
 				{
-					// if some exception occured, make sure we don't use this id
-					storage_[ id ].state = value_state::done;
+					shared_mutex::shared_guard lock( lock_ );
+					
+					if ( id < size_ )
+					{
+						// if some exception occured, make sure we don't use this id
+						storage_[ id ].state = value_state::done;
+					}
 
 					throw;
 				}
