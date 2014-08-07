@@ -31,13 +31,11 @@ namespace lock_free
 
 			void lock_shared()
 			{
-				if ( ++lock_required_ & locked )
+				while ( ++lock_required_ & locked )
 				{
 					--lock_required_;
 
 					wait_for_non_exclusive();
-
-					++lock_required_;
 				}
 			}
 
