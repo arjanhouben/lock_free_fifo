@@ -8,14 +8,17 @@ endif()
 
 find_package( Boost COMPONENTS system )
 
+find_path( TBB_INCLUDE_DIR tbb/concurrent_queue.h
+	PATH_SUFFIXES
+		tbb
+)
+
+find_library( TBB_LIBRARY tbb )
+
 include_directories(
 	include
 	${Boost_INCLUDE_DIR}
-	/Users/arjan/Downloads/tbb42_20140601oss/include/
-)
-
-link_directories(
-	/Users/arjan/Downloads/tbb42_20140601oss/lib/
+	${TBB_INCLUDE_DIR}
 )
 
 add_executable( fifotest
@@ -27,7 +30,7 @@ add_executable( fifotest
 target_link_libraries(
 	fifotest
 	${Boost_SYSTEM_LIBRARY}
-	tbb
+	${TBB_LIBRARY}
 )
 
 install(
