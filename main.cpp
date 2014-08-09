@@ -26,17 +26,17 @@ struct boostlockfree
 {
 	boostlockfree( size_t r = 1024 ) :
 	jobs_( r ) {}
-	
+
 	inline void push_back( T t )
 	{
 		jobs_.push( t );
 	}
-	
+
 	inline bool pop( T &t )
 	{
 		return jobs_.pop( t );
 	}
-	
+
 	boost::lockfree::queue< T > jobs_;
 };
 
@@ -44,19 +44,19 @@ template < typename T >
 struct boostasio
 {
 	boostasio( size_t = 1024 ) {}
-	
+
 	inline void push_back( T t )
 	{
 		service_.post( *t );
 	}
-	
+
 	inline bool pop( T &t )
 	{
 		static function_type tmp = [](){};
 		t = &tmp;
 		return service_.run_one() > 0;
 	}
-	
+
 	io_service service_;
 };
 #endif
@@ -69,17 +69,17 @@ struct inteltbb
 {
 	inteltbb( size_t = 1024 ) :
 	jobs_() {}
-	
+
 	inline void push_back( T t )
 	{
 		jobs_.push( t );
 	}
-	
+
 	inline bool pop( T &t )
 	{
 		return jobs_.try_pop( t );
 	}
-	
+
 	tbb::concurrent_queue< T > jobs_;
 };
 #endif
@@ -131,14 +131,14 @@ void test( const string &testname, size_t count, size_t threadcount )
 		high_resolution_clock::time_point t1 = high_resolution_clock::now();
 
 		auto data = make_shared< Q >( count );
-		
+
 		auto tmp = new function_type(
 			[data]()
 			{
 				++data->consumer_count;
 			}
 		);
-		
+
 		function_type producer = [data,tmp]()
 		{
 			while ( data->producer_count++ < data->expected )
@@ -177,7 +177,7 @@ void test( const string &testname, size_t count, size_t threadcount )
 			}
 
 			cout << '\t' << name << " took: " << time_span.count() << " seconds" << endl;
-			
+
 			delete tmp;
 		};
 
@@ -289,51 +289,36 @@ int main( int argc, char *argv[] )
 
 	const auto thread_count = 16;
 
-	map< string, function_type > tests
+	map< string, function_type > tests;
+
+	tests[ "0" ] = [=]()
 	{
-		{
-			"0",
-			[=]()
-			{
-				test< test_data< lock_free::fifo< function_type* > > >( "lock_free::fifo", test_count, thread_count );
-			},
-		},
-		{
-			"1",
-			[=]()
-			{
-				test< test_data< mutex_queue< function_type* > > >( "mutex_queue", test_count, thread_count );
-			}
-		}
+		test< test_data< lock_free::fifo< function_type* > > >( "lock_free::fifo", test_count, thread_count );
+	};
+
+	tests[ "1" ] = [=]()
+	{
+		test< test_data< mutex_queue< function_type* > > >( "mutex_queue", test_count, thread_count );
+	};
+
 #ifdef USE_BOOST
-		,
-		{
-			"2",
-			[=]()
-			{
-				test< test_data< boostlockfree< function_type* > > >( "boostlockfree", test_count, thread_count );
-			}
-		},
-		{
-			"3",
-			[=]()
-			{
-				test< test_data< boostasio< function_type* > > >( "boostasio", test_count, thread_count );
-			},
-		}
+	tests[ "2" ] = [=]()
+	{
+		test< test_data< boostlockfree< function_type* > > >( "boostlockfree", test_count, thread_count );
+	};
+
+	tests[ "3" ] = [=]()
+	{
+		test< test_data< boostasio< function_type* > > >( "boostasio", test_count, thread_count );
+	};
 #endif
 #ifdef USE_TBB
-		,
-		{
-			"4",
-			[=]()
-			{
-				test< test_data< inteltbb< function_type* > > >( "inteltbb", test_count, thread_count );
-			}
-		}
-#endif
+	tests[ "4" ] = [=]()
+	{
+		test< test_data< inteltbb< function_type* > > >( "inteltbb", test_count, thread_count );
 	};
-	
+#endif
+
 	if ( argc == 1 )
 	{
 		for( auto &test : tests )

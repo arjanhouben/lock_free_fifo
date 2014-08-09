@@ -17,10 +17,16 @@ find_library( TBB_LIBRARY tbb )
 
 if( TBB_LIBRARY AND TBB_INCLUDE_DIR )
 	add_definitions( -DUSE_TBB )
+else()
+	set( TBB_LIBRARY "" )
+	set( TBB_INCLUDE_DIR "" )
 endif()
 
 if( Boost_SYSTEM_LIBRARY AND Boost_INCLUDE_DIR )
 	add_definitions( -DUSE_BOOST )
+else()
+	set( Boost_SYSTEM_LIBRARY "" )
+	set( Boost_INCLUDE_DIR "" )
 endif()
 
 include_directories(
