@@ -10,18 +10,16 @@
 #include <map>
 
 #include <lock_free/fifo.h>
-#include <lock_free/shared_mutex.h>
-
-#include <boost/asio/io_service.hpp>
-#include <boost/lockfree/queue.hpp>
-
-#include "tbb/concurrent_queue.h"
 
 using namespace std;
 using namespace chrono;
-using namespace boost::asio;
 
 typedef function< void() >function_type;
+
+#ifdef USE_BOOST
+#include <boost/asio/io_service.hpp>
+#include <boost/lockfree/queue.hpp>
+using namespace boost::asio;
 
 template < typename T >
 struct boostlockfree
@@ -43,6 +41,30 @@ struct boostlockfree
 };
 
 template < typename T >
+struct boostasio
+{
+	boostasio( size_t = 1024 ) {}
+	
+	inline void push_back( T t )
+	{
+		service_.post( *t );
+	}
+	
+	inline bool pop( T &t )
+	{
+		static function_type tmp = [](){};
+		t = &tmp;
+		return service_.run_one() > 0;
+	}
+	
+	io_service service_;
+};
+#endif
+
+#ifdef USE_TBB
+#include "tbb/concurrent_queue.h"
+
+template < typename T >
 struct inteltbb
 {
 	inteltbb( size_t = 1024 ) :
@@ -60,26 +82,7 @@ struct inteltbb
 	
 	tbb::concurrent_queue< T > jobs_;
 };
-
-template < typename T >
-struct boostasio
-{
-	boostasio( size_t = 1024 ) {}
-
-	inline void push_back( T t )
-	{
-		service_.post( *t );
-	}
-
-	inline bool pop( T &t )
-	{
-		static function_type tmp = [](){};
-		t = &tmp;
-		return service_.run_one() > 0;
-	}
-
-	io_service service_;
-};
+#endif
 
 template < typename T >
 struct mutex_queue
@@ -292,30 +295,35 @@ int main( int argc, char *argv[] )
 			"0",
 			[=]()
 			{
-				test< test_data< boostlockfree< function_type* > > >( "boostlockfree", test_count, thread_count );
-			}
+				test< test_data< lock_free::fifo< function_type* > > >( "lock_free::fifo", test_count, thread_count );
+			},
 		},
 		{
 			"1",
 			[=]()
 			{
-				test< test_data< boostasio< function_type* > > >( "boostasio", test_count, thread_count );
-			},
-		},
+				test< test_data< mutex_queue< function_type* > > >( "mutex_queue", test_count, thread_count );
+			}
+		}
+#ifdef USE_BOOST
+		,
 		{
 			"2",
 			[=]()
 			{
-				test< test_data< lock_free::fifo< function_type* > > >( "lock_free::fifo", test_count, thread_count );
-			},
+				test< test_data< boostlockfree< function_type* > > >( "boostlockfree", test_count, thread_count );
+			}
 		},
 		{
 			"3",
 			[=]()
 			{
-				test< test_data< mutex_queue< function_type* > > >( "mutex_queue", test_count, thread_count );
-			}
-		},
+				test< test_data< boostasio< function_type* > > >( "boostasio", test_count, thread_count );
+			},
+		}
+#endif
+#ifdef USE_TBB
+		,
 		{
 			"4",
 			[=]()
@@ -323,6 +331,7 @@ int main( int argc, char *argv[] )
 				test< test_data< inteltbb< function_type* > > >( "inteltbb", test_count, thread_count );
 			}
 		}
+#endif
 	};
 	
 	if ( argc == 1 )

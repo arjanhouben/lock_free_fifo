@@ -15,6 +15,14 @@ find_path( TBB_INCLUDE_DIR tbb/concurrent_queue.h
 
 find_library( TBB_LIBRARY tbb )
 
+if( TBB_LIBRARY AND TBB_INCLUDE_DIR )
+	add_definitions( -DUSE_TBB )
+endif()
+
+if( Boost_SYSTEM_LIBRARY AND Boost_INCLUDE_DIR )
+	add_definitions( -DUSE_BOOST )
+endif()
+
 include_directories(
 	include
 	${Boost_INCLUDE_DIR}
