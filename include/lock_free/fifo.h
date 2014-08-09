@@ -171,13 +171,10 @@ namespace lock_free
 			 */
 			void clear()
 			{
-				lock_.exclusive(
-					[&]()
-					{
-						read_ = 0;
-						write_ = 0;
-					}
-				);
+				shared_mutex::exclusive_guard lock( lock_ );
+				
+				read_ = 0;
+				write_ = 0;
 			}
 
 			/**
@@ -200,19 +197,16 @@ namespace lock_free
 
 			void reset_counters()
 			{
-				lock_.exclusive(
-					[&]()
-					{
-						// check from within the mutex if another job was added since the last check
-						if ( read_ != write_ )
-						{
-							return;
-						}
+				shared_mutex::exclusive_guard lock( lock_ );
+				
+				// check from within the mutex if another job was added since the last check
+				if ( read_ != write_ )
+				{
+					return;
+				}
 
-						read_ = 0;
-						write_ = 0;
-					}
-				);
+				read_ = 0;
+				write_ = 0;
 			}
 
 			void resize_storage( size_t id )
@@ -221,16 +215,13 @@ namespace lock_free
 				{
 					if ( id == size_ )
 					{
-						lock_.exclusive(
-							[&]()
-							{
-								const size_t newsize = std::max< size_t >( 1, size_ * 2 );
+						shared_mutex::exclusive_guard lock( lock_ );
+				
+						const size_t newsize = std::max< size_t >( 1, size_ * 2 );
 
-								storage_.resize( newsize );
+						storage_.resize( newsize );
 
-								size_ = storage_.size();
-							}
-						);
+						size_ = storage_.size();
 					}
 					else
 					{

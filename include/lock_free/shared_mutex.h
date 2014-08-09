@@ -54,16 +54,6 @@ namespace lock_free
 				return ( lock_required_ & locked ) != 0;
 			}
 
-			template < typename F >
-			void exclusive( F f )
-			{
-				std::lock_guard< shared_mutex > guard( *this );
-
-				wait_single_user();
-
-				f();
-			}
-
 			class shared_guard
 			{
 				public:
@@ -79,6 +69,25 @@ namespace lock_free
 					}
 				private:
 					shared_guard& operator = ( const shared_guard& );
+					shared_mutex &m_;
+			};
+		
+			class exclusive_guard
+			{
+				public:
+					exclusive_guard( shared_mutex &m ) :
+						m_( m )
+					{
+						m_.lock();
+						m_.wait_single_user();
+					}
+					
+					~exclusive_guard()
+					{
+						m_.unlock();
+					}
+				private:
+					exclusive_guard& operator = ( const exclusive_guard& );
 					shared_mutex &m_;
 			};
 
